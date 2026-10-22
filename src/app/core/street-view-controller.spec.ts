@@ -253,6 +253,18 @@ describe('StreetViewController mode guards', () => {
     expect(seen).toEqual(['ArrowLeft']);
   });
 
+  it('reports heading changes for the compass, including NMPZ reverts', async () => {
+    const { backend, controller } = setup();
+    const headings: number[] = [];
+    controller.onPovChange((p) => headings.push(p.heading));
+    await controller.show(target(1, 1, { heading: 30 }), 'moving');
+    backend.pano.userPan({ heading: 90, pitch: 0 });
+    await controller.show(target(1, 1, { heading: 10 }), 'nmpz');
+    backend.pano.userPan({ heading: 200, pitch: 0 });
+    expect(headings.at(-1)).toBe(10);
+    expect(headings).toContain(90);
+  });
+
   it('switching modes between rounds updates options without a new viewer', async () => {
     const { backend, controller } = setup();
     await controller.show(target(1, 1), 'moving');

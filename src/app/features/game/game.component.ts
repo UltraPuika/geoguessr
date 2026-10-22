@@ -79,7 +79,13 @@ export class GameComponent implements OnDestroy {
   protected readonly load = signal<RoundLoad>('loading');
   protected readonly loadMessage = signal<string | null>(null);
   protected readonly remainingMs = signal<number | null>(null);
-  protected readonly mapExpanded = signal(false);
+  protected readonly mapSize = signal<MapSize>(loadMapSize());
+  protected readonly heading = this.sv.heading;
+  protected readonly compassLabel = computed(() => {
+    const dirs = ['north', 'north-east', 'east', 'south-east', 'south', 'south-west', 'west', 'north-west'];
+    const h = ((this.heading() % 360) + 360) % 360;
+    return dirs[Math.round(h / 45) % 8];
+  });
   protected readonly saveError = signal<string | null>(null);
   protected readonly saving = signal(false);
 
@@ -240,7 +246,6 @@ export class GameComponent implements OnDestroy {
     if (!result) return;
     this.submittedAt = performance.now();
     this.timer?.stop();
-    this.mapExpanded.set(true);
     this.showResult(result);
     setTimeout(() => this.nextBtn()?.nativeElement.focus(), 0);
   }
@@ -289,7 +294,6 @@ export class GameComponent implements OnDestroy {
     }
     if (!this.game.mutate((g) => g.next())) return;
     this.resultLayer?.clearLayers();
-    this.mapExpanded.set(false);
     this.timer?.stop();
     this.timer = null;
     this.leaflet?.setView([20, 0], 2);
@@ -321,8 +325,27 @@ export class GameComponent implements OnDestroy {
     void this.router.navigate(['/']);
   }
 
-  protected toggleMap(): void {
-    this.mapExpanded.update((v) => !v);
-    setTimeout(() => this.leaflet?.invalidateSize(), 220);
+  protected resizeMap(delta: -1 | 1): void {
+    const next = Math.min(3, Math.max(0, this.mapSize() + delta)) as MapSize;
+    this.mapSize.set(next);
+    try {
+      localStorage.setItem(MAP_SIZE_KEY, String(next));
+    } catch {
+      // Preference only; ignore storage failures.
+    }
   }
+}
+
+type MapSize = 0 | 1 | 2 | 3;
+const MAP_SIZE_KEY = 'geoguess.guessMapSize';
+
+function loadMapSize(): MapSize {
+  try {
+    const raw = localStorage.getItem(MAP_SIZE_KEY);
+    const v = raw === null ? NaN : Number(raw);
+    if (v === 0 || v === 1 || v === 2 || v === 3) return v;
+  } catch {
+    // Fall through to default.
+  }
+  return 1;
 }

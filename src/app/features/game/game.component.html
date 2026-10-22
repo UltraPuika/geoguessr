@@ -45,6 +45,14 @@
         <!-- Blocks drag/wheel/touch: the API has no option to disable mouse panning. -->
         <div class="nmpz-shield" aria-hidden="true"></div>
       }
+      @if (load() === 'ready') {
+        <div class="compass" role="img" [attr.aria-label]="'Compass: facing ' + compassLabel()">
+          <div class="compass-rose" [style.transform]="'rotate(' + -heading() + 'deg)'">
+            <span class="cn">N</span><span class="ce">E</span><span class="cs">S</span><span class="cw">W</span>
+          </div>
+          <div class="compass-needle" aria-hidden="true"></div>
+        </div>
+      }
       @if (load() !== 'ready' && !locked()) {
         <div class="stage-overlay" role="status">
           @switch (load()) {
@@ -88,7 +96,7 @@
       }
     </div>
 
-    <aside class="guess-panel" [class.expanded]="mapExpanded()" [class.result]="locked()" aria-label="Guess map">
+    <aside class="guess-panel" [class]="'size-' + mapSize()" [class.result]="locked()" aria-label="Guess map">
       <div class="guess-panel-bar">
         <span class="small">
           @if (locked()) {
@@ -99,9 +107,12 @@
             Click the map to place your guess
           }
         </span>
-        <button type="button" class="btn-icon" (click)="toggleMap()" [attr.aria-label]="mapExpanded() ? 'Shrink map' : 'Enlarge map'">
-          {{ mapExpanded() ? '⤡' : '⤢' }}
-        </button>
+        @if (!locked()) {
+          <span class="size-buttons">
+            <button type="button" class="btn-icon" (click)="resizeMap(-1)" [disabled]="mapSize() === 0" aria-label="Smaller map" title="Smaller map">−</button>
+            <button type="button" class="btn-icon" (click)="resizeMap(1)" [disabled]="mapSize() === 3" aria-label="Larger map" title="Larger map">+</button>
+          </span>
+        }
       </div>
       <div #guessMap class="leaflet-box guess-map" role="application" aria-label="Map: click to place your guess"></div>
       @if (!locked()) {

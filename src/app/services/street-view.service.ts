@@ -77,6 +77,8 @@ export class StreetViewService {
   private parking: HTMLElement | null = null;
 
   readonly hasViewer = signal(false);
+  /** Current camera heading in degrees, for the compass. */
+  readonly heading = signal(0);
 
   get apiConfigured(): boolean {
     return this.loader.hasKey;
@@ -93,6 +95,7 @@ export class StreetViewService {
           loadTimeoutMs: USAGE_CONFIG.panoramaLoadTimeoutMs,
           searchRadiusMeters: 50,
         });
+        this.controller.onPovChange((pov) => this.heading.set(pov.heading));
         return this.controller;
       })
       .catch((err) => {

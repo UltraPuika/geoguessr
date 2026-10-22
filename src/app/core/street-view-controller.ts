@@ -153,6 +153,7 @@ export class StreetViewController {
   private queue: Promise<unknown> = Promise.resolve();
   private readonly keyGuard = (e: KeyboardEvent) => this.onKey(e);
   private readonly win: Window | null;
+  private readonly povListeners = new Set<(pov: Pov) => void>();
 
   constructor(
     private readonly backend: StreetViewBackend,
@@ -204,6 +205,18 @@ export class StreetViewController {
     } finally {
       this.reverting = false;
     }
+  }
+
+  /** Subscribes to camera changes (for a compass). Returns an unsubscribe function. */
+  onPovChange(fn: (pov: Pov) => void): () => void {
+    this.povListeners.add(fn);
+    return () => this.povListeners.delete(fn);
+  }
+
+  private emitPov(): void {
+    if (!this.pano) return;
+    const pov = this.pano.getPov();
+    for (const fn of this.povListeners) fn(pov);
   }
 
   currentView(): CurrentView | null {
@@ -288,6 +301,7 @@ export class StreetViewController {
 
       this.loadedKey = key;
       this.lock = { pano: found.panoId, pov, zoom: target.zoom };
+      this.emitPov();
       if (reservation) await this.gate.settle(reservation, 'confirmed');
       return { kind: 'ok', panoId: found.panoId, position: { lat: found.lat, lng: found.lng }, consumedUnit: consume };
     } catch (err) {
@@ -314,6 +328,7 @@ export class StreetViewController {
   }
 
   private installGuards(pano: PanoramaLike): void {
+    pano.addListener('pov_changed', () => this.emitPov());
     pano.addListener('pano_changed', () => {
       if (this.reverting || !this.lock || restrictionsFor(this.mode).allowMove) return;
       if (pano.getPano() !== this.lock.pano) this.revert(() => pano.setPano(this.lock!.pano));

@@ -942,16 +942,36 @@ input[type='radio'] {
   transition:
     width 0.18s ease,
     height 0.18s ease;
-  height: 300px;
   opacity: 0.85;
   &:hover,
-  &:focus-within,
-  &.expanded {
+  &:focus-within {
     opacity: 1;
-    width: min(720px, calc(100vw - 2rem));
-    height: min(520px, calc(100vh - 8rem));
   }
-  &.result {
+  // Small enlarges on hover like GeoGuessr; larger sizes stay as chosen.
+  &.size-0 {
+    width: 300px;
+    height: 220px;
+    &:hover,
+    &:focus-within {
+      width: 480px;
+      height: 360px;
+    }
+  }
+  &.size-1 {
+    width: min(480px, calc(100vw - 2rem));
+    height: min(380px, calc(100vh - 8rem));
+  }
+  &.size-2 {
+    width: min(50vw, calc(100vw - 2rem));
+    height: min(60vh, calc(100vh - 8rem));
+  }
+  &.size-3 {
+    width: min(72vw, calc(100vw - 2rem));
+    height: calc(100vh - 8rem);
+  }
+  &.result,
+  &.result:hover,
+  &.result:focus-within {
     opacity: 1;
     width: min(900px, calc(100vw - 2rem));
     height: calc(100vh - 14rem);
@@ -959,6 +979,62 @@ input[type='radio'] {
     transform: translateX(50%);
     bottom: 11rem;
   }
+}
+.size-buttons {
+  display: flex;
+  gap: 0.15rem;
+}
+
+.compass {
+  position: absolute;
+  left: 1rem;
+  bottom: 1.5rem;
+  width: 76px;
+  height: 76px;
+  z-index: 7;
+  border-radius: 50%;
+  background: rgba(11, 15, 20, 0.75);
+  border: 2px solid rgba(255, 255, 255, 0.35);
+  pointer-events: none;
+}
+.compass-rose {
+  position: absolute;
+  inset: 0;
+  font-family: var(--mono);
+  font-weight: 700;
+  font-size: 0.8rem;
+  span {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    width: 1rem;
+    margin: -0.55rem 0 0 -0.5rem;
+    text-align: center;
+  }
+  .cn {
+    transform: translateY(-27px);
+    color: var(--danger);
+  }
+  .cs {
+    transform: translateY(27px);
+  }
+  .ce {
+    transform: translateX(27px);
+  }
+  .cw {
+    transform: translateX(-27px);
+  }
+}
+.compass-needle {
+  position: absolute;
+  left: 50%;
+  top: 6px;
+  width: 0;
+  height: 0;
+  margin-left: -5px;
+  border-left: 5px solid transparent;
+  border-right: 5px solid transparent;
+  border-top: 8px solid var(--accent);
 }
 .guess-panel-bar {
   display: flex;
@@ -1145,19 +1221,43 @@ input[type='radio'] {
   .hud-value {
     max-width: 9rem;
   }
+  .compass {
+    left: 0.5rem;
+    top: 0.5rem;
+    bottom: auto;
+    transform: scale(0.8);
+  }
   .guess-panel {
     left: 0.5rem;
     right: 0.5rem;
     bottom: 0.5rem;
     width: auto;
-    height: 220px;
-    &:hover,
-    &:focus-within,
-    &.expanded {
+    &.size-0,
+    &.size-0:hover,
+    &.size-1,
+    &.size-2,
+    &.size-3 {
       width: auto;
-      height: 55vh;
     }
-    &.result {
+    &.size-0 {
+      height: 25vh;
+      &:hover,
+      &:focus-within {
+        height: 40vh;
+      }
+    }
+    &.size-1 {
+      height: 35vh;
+    }
+    &.size-2 {
+      height: 50vh;
+    }
+    &.size-3 {
+      height: 70vh;
+    }
+    &.result,
+    &.result:hover,
+    &.result:focus-within {
       width: auto;
       right: 0.5rem;
       transform: none;
