@@ -1,0 +1,231 @@
+<div class="page page-wide">
+  @if (notFound()) {
+    <div class="empty card">
+      <h1>Map not found</h1>
+      <p>It may have been deleted.</p>
+      <a class="btn btn-primary" routerLink="/">Back to maps</a>
+    </div>
+  }
+  @if (loadError()) {
+    <div class="alert alert-error" role="alert">{{ loadError() }}</div>
+  }
+
+  <div class="editor-head" [hidden]="notFound()">
+    <a routerLink="/" class="back-link">← Maps</a>
+    <form class="card details-form" (ngSubmit)="saveDetails()" aria-label="Map details">
+      <div class="field grow">
+        <label for="map-name">Map name</label>
+        <input id="map-name" name="name" [(ngModel)]="details.name" (ngModelChange)="markDirty()" maxlength="200" required />
+      </div>
+      <div class="field">
+        <label for="map-order">Default location order</label>
+        <select id="map-order" name="order" [(ngModel)]="details.defaultOrder" (ngModelChange)="markDirty()">
+          <option value="random">Randomized</option>
+          <option value="fixed">Fixed (list order)</option>
+        </select>
+      </div>
+      <div class="field full">
+        <label for="map-desc">Description (optional)</label>
+        <textarea
+          id="map-desc"
+          name="description"
+          rows="2"
+          [(ngModel)]="details.description"
+          (ngModelChange)="markDirty()"
+          maxlength="2000"
+        ></textarea>
+      </div>
+      <div class="actions full">
+        <button class="btn btn-primary" type="submit" [disabled]="!detailsDirty() || !details.name.trim() || busy()">
+          Save details
+        </button>
+        @if (locations().length) {
+          <a class="btn" [routerLink]="['/play', id()]">Play this map</a>
+        }
+        <button class="btn btn-ghost" type="button" (click)="exportMap()" [disabled]="busy()">Export JSON</button>
+        <span class="spacer"></span>
+        <button class="btn btn-ghost btn-danger" type="button" (click)="deleteMap()" [disabled]="busy()">
+          Delete map
+        </button>
+      </div>
+    </form>
+  </div>
+
+  <div class="editor-grid" [hidden]="notFound()">
+    <section class="card editor-map-card" aria-labelledby="add-h">
+      <h2 id="add-h">Add a location</h2>
+      <p class="muted small">Click the map, or enter coordinates. Coverage is checked with a free metadata lookup.</p>
+      <div #leafletMap class="leaflet-box editor-map" role="application" aria-label="Map: click to place a location"></div>
+      <form class="inline-form manual-form" (ngSubmit)="addManual()" aria-label="Enter coordinates">
+        <div class="field">
+          <label for="lat">Latitude</label>
+          <input id="lat" name="lat" inputmode="decimal" [(ngModel)]="manual.lat" placeholder="48.8584" />
+        </div>
+        <div class="field">
+          <label for="lng">Longitude</label>
+          <input id="lng" name="lng" inputmode="decimal" [(ngModel)]="manual.lng" placeholder="2.2945" />
+        </div>
+        <button class="btn" type="submit">Go</button>
+      </form>
+      @if (manualError()) {
+        <p class="field-error" role="alert">{{ manualError() }}</p>
+      }
+    </section>
+
+    <section class="card draft-card" aria-labelledby="draft-h" aria-live="polite">
+      @if (draft(); as d) {
+        <h2 id="draft-h">{{ d.id ? 'Edit location' : 'New location' }}</h2>
+        <p class="mono">{{ formatCoord(d.lat, d.lng) }}</p>
+
+        @switch (coverage().kind) {
+          @case ('checking') {
+            <p class="muted">Checking Street View coverage…</p>
+          }
+          @case ('missing') {
+            <p class="alert alert-warn">No Street View imagery within 50 m. Pick a spot on a road with coverage.</p>
+          }
+          @case ('error') {
+            <p class="alert alert-error">{{ $any(coverage()).message }}</p>
+          }
+          @case ('found') {
+            <p class="alert alert-ok">
+              Street View available
+              @if ($any(coverage()).pano.date) {
+                · imagery {{ $any(coverage()).pano.date }}
+              }
+              @if ($any(coverage()).movedKm > 0.002) {
+                · snapped {{ formatDistance($any(coverage()).movedKm) }} to the nearest panorama
+              }
+            </p>
+          }
+        }
+      } @else {
+        <h2 id="draft-h">No location selected</h2>
+        <p class="muted">Click the map or enter coordinates to start a new location, or pick one from the list.</p>
+      }
+
+      <div class="preview-wrap" [hidden]="!draft()">
+        <div #preview class="sv-container preview" aria-label="Street View preview"></div>
+        @if (draft() && previewState() !== 'ready') {
+            <div class="preview-overlay">
+              @switch (previewState()) {
+                @case ('loading') {
+                  <p>Loading Street View…</p>
+                }
+                @case ('blocked') {
+                  <p class="danger-text">Preview blocked: {{ previewMessage() }}</p>
+                }
+                @case ('no-imagery') {
+                  <p>No imagery could be loaded here.</p>
+                }
+                @case ('error') {
+                  <p class="danger-text">{{ previewMessage() }}</p>
+                }
+                @default {
+                  @if (!sv.apiConfigured) {
+                    <p>Street View preview needs a Google Maps API key (see README).</p>
+                  } @else {
+                    <button class="btn btn-primary" type="button" (click)="loadPreview()" [disabled]="usage.blocked() && previewWillConsume()">
+                      Load Street View preview
+                    </button>
+                    <p class="small muted">
+                      @if (previewWillConsume()) {
+                        Uses 1 of this month's Street View loads.
+                      } @else {
+                        Reuses the open viewer — no extra usage.
+                      }
+                    </p>
+                  }
+                }
+              }
+            </div>
+        }
+      </div>
+
+      @if (draft(); as d) {
+        @if (previewState() === 'ready') {
+          <div class="actions">
+            <button class="btn" type="button" (click)="useCurrentView()">Use current view as start</button>
+            <span class="muted small">Look around (or move), then capture the starting view.</span>
+          </div>
+        }
+
+        <form class="draft-form" (ngSubmit)="saveDraft()" aria-label="Location details">
+          <div class="field full">
+            <label for="loc-name">Name (optional)</label>
+            <input id="loc-name" name="name" [ngModel]="d.name" (ngModelChange)="updateDraft({ name: $event })" maxlength="200" />
+          </div>
+          <div class="field full">
+            <label for="loc-notes">Notes (optional)</label>
+            <textarea id="loc-notes" name="notes" rows="2" [ngModel]="d.notes" (ngModelChange)="updateDraft({ notes: $event })" maxlength="2000"></textarea>
+          </div>
+          <div class="field">
+            <label for="loc-heading">Heading °</label>
+            <input id="loc-heading" name="heading" type="number" min="0" max="360" step="0.1" [ngModel]="d.heading" (ngModelChange)="updateDraft({ heading: $event })" />
+          </div>
+          <div class="field">
+            <label for="loc-pitch">Pitch °</label>
+            <input id="loc-pitch" name="pitch" type="number" min="-90" max="90" step="0.1" [ngModel]="d.pitch" (ngModelChange)="updateDraft({ pitch: $event })" />
+          </div>
+          <div class="field">
+            <label for="loc-zoom">Zoom</label>
+            <input id="loc-zoom" name="zoom" type="number" min="0" max="5" step="0.1" [ngModel]="d.zoom" (ngModelChange)="updateDraft({ zoom: $event })" />
+          </div>
+          <p class="small muted full">Panorama ID: <span class="mono">{{ d.panoId ?? 'none (coordinates only)' }}</span></p>
+          <div class="actions full">
+            <button class="btn btn-primary" type="submit" [disabled]="busy()">{{ d.id ? 'Update location' : 'Save location' }}</button>
+            <button class="btn btn-ghost" type="button" (click)="checkCoverage()">Re-check coverage</button>
+            <button class="btn btn-ghost" type="button" (click)="cancelDraft()">Cancel</button>
+          </div>
+        </form>
+      }
+      <app-usage-meter [compact]="true" />
+    </section>
+  </div>
+
+  <section class="card" aria-labelledby="list-h" [hidden]="notFound()">
+    <div class="section-head">
+      <h2 id="list-h">Locations ({{ locations().length }})</h2>
+      <div class="actions">
+        @if (checkAllProgress()) {
+          <span class="muted small">{{ checkAllProgress() }}</span>
+        }
+        <button class="btn btn-small" type="button" (click)="checkAllCoverage()" [disabled]="!locations().length || !!checkAllProgress() || !sv.apiConfigured">
+          Check all coverage
+        </button>
+      </div>
+    </div>
+    @if (!locations().length) {
+      <p class="muted">No locations yet.</p>
+    } @else {
+      <ol class="loc-list">
+        @for (l of locations(); track l.id; let i = $index; let first = $first; let last = $last) {
+          <li class="loc-row" [class.selected]="draft()?.id === l.id">
+            <span class="loc-index">{{ i + 1 }}</span>
+            <span class="loc-main">
+              <strong>{{ l.name || formatCoord(l.lat, l.lng) }}</strong>
+              @if (l.name) {
+                <span class="muted small mono">{{ formatCoord(l.lat, l.lng) }}</span>
+              }
+            </span>
+            <span class="badge" [class]="'cov-' + l.coverage">
+              @switch (l.coverage) {
+                @case ('ok') { Imagery OK }
+                @case ('missing') { No imagery }
+                @case ('error') { Check failed }
+                @default { Not checked }
+              }
+            </span>
+            <span class="loc-actions">
+              <button class="btn-icon" type="button" (click)="move(i, -1)" [disabled]="first || busy()" [attr.aria-label]="'Move location ' + (i + 1) + ' up'">↑</button>
+              <button class="btn-icon" type="button" (click)="move(i, 1)" [disabled]="last || busy()" [attr.aria-label]="'Move location ' + (i + 1) + ' down'">↓</button>
+              <button class="btn btn-small" type="button" (click)="editLocation(l)">Edit</button>
+              <button class="btn btn-small" type="button" (click)="previewLocation(l)" [disabled]="!sv.apiConfigured">Preview</button>
+              <button class="btn btn-small btn-danger" type="button" (click)="deleteLocation(l, i)" [disabled]="busy()">Delete</button>
+            </span>
+          </li>
+        }
+      </ol>
+    }
+  </section>
+</div>

@@ -1,0 +1,83 @@
+<div class="page">
+  @if (loading()) {
+    <p class="muted">Loading results…</p>
+  } @else if (error()) {
+    <div class="alert alert-error" role="alert">{{ error() }}</div>
+    <a routerLink="/history" class="btn">All results</a>
+  } @else if (data(); as d) {
+    <section class="card results-hero">
+      <div>
+        <p class="muted small">{{ d.game.setup.mapName }} · {{ modeLabels[d.game.setup.mode] }} · {{ formatDate(d.game.playedAt) }}</p>
+        <h1 class="total-score">
+          {{ d.game.totalScore | number }} <span class="muted">/ {{ d.game.maxScore | number }}</span>
+        </h1>
+        <div class="score-bar" aria-hidden="true">
+          <div [style.width.%]="d.game.maxScore ? (d.game.totalScore / d.game.maxScore) * 100 : 0"></div>
+        </div>
+      </div>
+      <dl class="stats">
+        <div><dt>Total distance error</dt><dd>{{ formatDistance(d.game.guessedRounds ? d.game.totalDistanceKm : null) }}</dd></div>
+        <div><dt>Average distance error</dt><dd>{{ formatDistance(d.game.averageDistanceKm) }}</dd></div>
+        <div><dt>Rounds with a guess</dt><dd>{{ d.game.guessedRounds }} / {{ d.game.roundCount }}</dd></div>
+        <div>
+          <dt>Time limit</dt>
+          <dd>{{ d.game.setup.timeLimitSec === null ? 'None' : d.game.setup.timeLimitSec + ' s' }}</dd>
+        </div>
+      </dl>
+      <div class="actions">
+        <button type="button" class="btn btn-primary" (click)="replay()" [disabled]="!mapExists()">Replay same settings</button>
+        <a class="btn" [routerLink]="['/play', d.game.setup.mapId]" [class.disabled]="!mapExists()" [attr.aria-disabled]="!mapExists()">
+          New game on this map
+        </a>
+        <a class="btn btn-ghost" routerLink="/">Home</a>
+        <a class="btn btn-ghost" routerLink="/history">Previous results</a>
+      </div>
+      @if (!mapExists()) {
+        <p class="muted small">The map used for this game has been deleted.</p>
+      }
+    </section>
+  }
+
+  <div #resultsMap class="leaflet-box results-map card" [hidden]="!data()" role="img" aria-label="Map of all rounds: green is correct, yellow is your guess"></div>
+
+  @if (data(); as d) {
+    <section class="card">
+      <h2>Rounds</h2>
+      <div class="table-wrap">
+        <table class="rounds-table">
+          <thead>
+            <tr>
+              <th scope="col">#</th>
+              <th scope="col">Location</th>
+              <th scope="col">Your guess</th>
+              <th scope="col">Distance</th>
+              <th scope="col" class="num">Score</th>
+            </tr>
+          </thead>
+          <tbody>
+            @for (r of d.rounds; track r.index) {
+              <tr>
+                <td>{{ r.index + 1 }}</td>
+                <td>
+                  @if (r.locationName) {
+                    <div>{{ r.locationName }}</div>
+                  }
+                  <span class="mono small">{{ formatCoord(r.actual.lat, r.actual.lng) }}</span>
+                </td>
+                <td class="mono small">
+                  @if (r.guess) {
+                    {{ formatCoord(r.guess.lat, r.guess.lng) }}
+                  } @else {
+                    {{ r.reason === 'skipped' ? 'Skipped' : 'No guess (time ran out)' }}
+                  }
+                </td>
+                <td>{{ formatDistance(r.distanceKm) }}</td>
+                <td class="num"><strong>{{ r.score | number }}</strong></td>
+              </tr>
+            }
+          </tbody>
+        </table>
+      </div>
+    </section>
+  }
+</div>

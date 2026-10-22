@@ -1,0 +1,132 @@
+<div class="page page-narrow">
+  <a routerLink="/" class="back-link">← Maps</a>
+  @if (loading()) {
+    <p class="muted">Loading…</p>
+  } @else if (error()) {
+    <div class="alert alert-error" role="alert">{{ error() }}</div>
+  } @else if (map(); as m) {
+    <h1>Play “{{ m.name }}”</h1>
+    <p class="muted">{{ locations().length }} location{{ locations().length === 1 ? '' : 's' }} on this map.</p>
+
+    <form class="card setup-form" (ngSubmit)="start()" aria-label="Game settings">
+      <fieldset>
+        <legend>Game mode</legend>
+        <div class="mode-options">
+          @for (md of modes; track md) {
+            <label class="mode-option" [class.selected]="mode() === md">
+              <input type="radio" name="mode" [value]="md" [ngModel]="mode()" (ngModelChange)="mode.set($event)" />
+              <span class="mode-name">{{ modeLabels[md] }}</span>
+              <span class="small muted">{{ modeHelp[md] }}</span>
+            </label>
+          }
+        </div>
+      </fieldset>
+
+      <div class="grid-2">
+        <div class="field">
+          <label for="rounds">Rounds</label>
+          <input
+            id="rounds"
+            name="rounds"
+            type="number"
+            min="1"
+            max="50"
+            [ngModel]="rounds()"
+            (ngModelChange)="rounds.set($event)"
+          />
+          <div class="chip-row">
+            @for (r of [1, 3, 5, 10]; track r) {
+              <button type="button" class="chip" [class.selected]="rounds() === r" (click)="rounds.set(r)">{{ r }}</button>
+            }
+            <button type="button" class="chip" (click)="useAllLocations()">All ({{ locations().length }})</button>
+          </div>
+        </div>
+
+        <div class="field">
+          <label for="timer">Time limit per round</label>
+          <select id="timer" name="timer" [ngModel]="timerChoice()" (ngModelChange)="timerChoice.set($event)">
+            @for (p of timerPresets; track p.label) {
+              <option [ngValue]="p.value === null ? 'none' : p.value.toString()">{{ p.label }}</option>
+            }
+            <option value="custom">Custom…</option>
+          </select>
+          @if (timerChoice() === 'custom') {
+            <label for="custom-seconds" class="small">Seconds (5–3600)</label>
+            <input
+              id="custom-seconds"
+              name="customSeconds"
+              type="number"
+              min="5"
+              max="3600"
+              [ngModel]="customSeconds()"
+              (ngModelChange)="customSeconds.set($event)"
+            />
+          }
+        </div>
+
+        <div class="field">
+          <label for="order">Location order</label>
+          <select id="order" name="order" [ngModel]="order()" (ngModelChange)="order.set($event)">
+            <option value="random">Randomized</option>
+            <option value="fixed">Fixed (map order)</option>
+          </select>
+        </div>
+
+        <div class="field">
+          <label for="scale">Scoring scale</label>
+          <select id="scale" name="scale" [ngModel]="scoringScale()" (ngModelChange)="scoringScale.set($event)">
+            <option value="world">World (classic)</option>
+            <option value="map">Fit to this map's area</option>
+          </select>
+          <span class="small muted">Score halves roughly every {{ (scaleKm() * 0.693) | number: '1.0-1' }} km.</span>
+        </div>
+      </div>
+
+      <label class="checkbox">
+        <input type="checkbox" name="repeats" [ngModel]="allowRepeats()" (ngModelChange)="allowRepeats.set($event)" />
+        Allow locations to repeat when there are more rounds than locations
+      </label>
+
+      @if (plan().message) {
+        <p class="alert" [class.alert-warn]="plan().capped" [class.alert-info]="!plan().capped">{{ plan().message }}</p>
+      }
+
+      <div class="summary-row">
+        <div>
+          <span class="muted small">Rounds</span>
+          <strong class="big">{{ plan().effectiveRounds }}</strong>
+        </div>
+        <div>
+          <span class="muted small">Max score</span>
+          <strong class="big">{{ maxScore() | number }}</strong>
+        </div>
+        <div>
+          <span class="muted small">Time / round</span>
+          <strong class="big">{{ timeLimitSec() === null ? '∞' : timeLimitSec() + ' s' }}</strong>
+        </div>
+        <div>
+          <span class="muted small">Street View loads (max)</span>
+          <strong class="big">{{ estimatedLoads() }}</strong>
+        </div>
+      </div>
+
+      <app-usage-meter [compact]="true" />
+      @if (!apiConfigured) {
+        <p class="alert alert-error">No Google Maps API key is configured, so Street View cannot load. See README.</p>
+      } @else if (usageProblem()) {
+        <p class="alert alert-error" role="alert">{{ usageProblem() }}</p>
+      }
+
+      <div class="actions">
+        <button
+          class="btn btn-primary btn-large"
+          type="submit"
+          [disabled]="starting() || plan().effectiveRounds === 0 || !!usageProblem() || !apiConfigured"
+        >
+          {{ starting() ? 'Starting…' : 'Start game' }}
+        </button>
+        <a class="btn btn-ghost" [routerLink]="['/maps', m.id]">Edit map</a>
+      </div>
+    </form>
+  }
+</div>

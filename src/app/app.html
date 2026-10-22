@@ -1,0 +1,41 @@
+<button type="button" class="skip-link" (click)="focusMain()">Skip to content</button>
+@if (!inGame()) {
+  <header class="app-header">
+    <a routerLink="/" class="brand" aria-label="Home">
+      <span class="brand-mark" aria-hidden="true">◎</span> GeoGuess<span class="brand-accent">Personal</span>
+    </a>
+    <nav aria-label="Main">
+      <a routerLink="/" routerLinkActive="active" [routerLinkActiveOptions]="{ exact: true }">Maps</a>
+      <a routerLink="/history" routerLinkActive="active">History</a>
+      <a routerLink="/settings" routerLinkActive="active">Settings &amp; usage</a>
+    </nav>
+    @if (usage.status(); as s) {
+      <a
+        routerLink="/settings"
+        class="usage-pill"
+        [class.warn]="s.warningLevel >= 80 && !s.blocked"
+        [class.danger]="s.blocked"
+        [attr.aria-label]="'Street View usage ' + s.counted + ' of ' + s.limit"
+      >
+        @if (s.state !== 'ok') {
+          Street View blocked
+        } @else {
+          SV {{ s.counted }} / {{ s.limit }}
+        }
+      </a>
+    }
+  </header>
+}
+
+<main id="main" tabindex="-1" [class.game-main]="inGame()">
+  <router-outlet />
+</main>
+
+<div class="toasts" aria-live="polite">
+  @for (t of toast.toasts(); track t.id) {
+    <div class="toast" [class]="'toast-' + t.kind" role="status">
+      <span>{{ t.text }}</span>
+      <button type="button" class="btn-icon" (click)="toast.dismiss(t.id)" aria-label="Dismiss">×</button>
+    </div>
+  }
+</div>

@@ -1,0 +1,128 @@
+<div class="page">
+  <section class="hero card">
+    <div>
+      <h1>Your maps</h1>
+      <p class="muted">Pick a map to play, or build a new one from your own Street View spots.</p>
+    </div>
+    <form class="inline-form" (ngSubmit)="create()" aria-label="Create a new map">
+      <label class="sr-only" for="new-map-name">New map name</label>
+      <input id="new-map-name" name="newName" [(ngModel)]="newName" placeholder="New map name" maxlength="200" required />
+      <button class="btn btn-primary" type="submit" [disabled]="!newName.trim() || busy()">Create map</button>
+    </form>
+  </section>
+
+  <div class="toolbar">
+    <label class="sr-only" for="map-search">Search maps</label>
+    <input
+      id="map-search"
+      type="search"
+      placeholder="Search maps…"
+      [ngModel]="search()"
+      (ngModelChange)="search.set($event)"
+    />
+    <label class="sr-only" for="map-sort">Sort maps</label>
+    <select id="map-sort" [ngModel]="sort()" (ngModelChange)="sort.set($event)">
+      <option value="updated">Last modified</option>
+      <option value="name">Name</option>
+      <option value="count">Most locations</option>
+    </select>
+    <span class="spacer"></span>
+    <label class="btn" [class.disabled]="busy()">
+      Import JSON
+      <input type="file" accept="application/json,.json" class="sr-only" (change)="importFile(fileInput)" #fileInput />
+    </label>
+    <button class="btn" type="button" (click)="exportAll()" [disabled]="busy() || !maps()?.length">Export all</button>
+  </div>
+
+  @if (importErrors().length) {
+    <div class="alert alert-error" role="alert">
+      <strong>Import rejected — no maps were changed.</strong>
+      <ul>
+        @for (e of importErrors(); track $index) {
+          <li>{{ e }}</li>
+        }
+      </ul>
+    </div>
+  }
+
+  @if (loadError()) {
+    <div class="alert alert-error" role="alert">
+      {{ loadError() }} <button class="btn btn-small" type="button" (click)="load()">Retry</button>
+    </div>
+  }
+
+  @if (maps() === null) {
+    <p class="muted">Loading maps…</p>
+  } @else if (!maps()!.length) {
+    <div class="empty card">
+      <h2>No maps yet</h2>
+      <p>Create your first map above, or import a JSON backup.</p>
+    </div>
+  } @else if (!visibleMaps().length) {
+    <p class="muted">No maps match “{{ search() }}”.</p>
+  } @else {
+    <ul class="map-grid" aria-label="Maps">
+      @for (m of visibleMaps(); track m.id) {
+        <li class="card map-card">
+          <div class="map-card-body">
+            <h2 class="map-card-title">{{ m.name }}</h2>
+            <p class="map-card-meta">
+              <span class="badge">{{ m.locationCount | number }} location{{ m.locationCount === 1 ? '' : 's' }}</span>
+              <span class="muted small">Edited {{ formatDate(m.updatedAt) }}</span>
+            </p>
+            @if (m.description) {
+              <p class="map-card-desc">{{ m.description }}</p>
+            }
+          </div>
+          <div class="map-card-actions">
+            @if (m.locationCount > 0) {
+              <a class="btn btn-primary" [routerLink]="['/play', m.id]">Play</a>
+            } @else {
+              <button class="btn btn-primary" type="button" disabled title="Add locations first">Play</button>
+            }
+            <a class="btn" [routerLink]="['/maps', m.id]">Edit</a>
+            <button class="btn btn-ghost" type="button" (click)="duplicate(m)" [disabled]="busy()">Duplicate</button>
+            <button class="btn btn-ghost" type="button" (click)="exportOne(m)" [disabled]="busy()">Export</button>
+            <button class="btn btn-ghost btn-danger" type="button" (click)="remove(m)" [disabled]="busy()">
+              Delete
+            </button>
+          </div>
+        </li>
+      }
+    </ul>
+  }
+
+  <div class="two-col">
+    <section class="card" aria-labelledby="recent-h">
+      <div class="section-head">
+        <h2 id="recent-h">Recent results</h2>
+        <a routerLink="/history">All results →</a>
+      </div>
+      @if (!recent().length) {
+        <p class="muted">No games played yet.</p>
+      } @else {
+        <ul class="list">
+          @for (g of recent(); track g.id) {
+            <li>
+              <a [routerLink]="['/results', g.id]" class="list-link">
+                <span>
+                  <strong>{{ g.setup.mapName }}</strong>
+                  <span class="muted small"> · {{ modeLabels[g.setup.mode] }} · {{ formatDate(g.playedAt) }}</span>
+                </span>
+                <span class="score">{{ g.totalScore | number }} / {{ g.maxScore | number }}</span>
+              </a>
+            </li>
+          }
+        </ul>
+      }
+    </section>
+
+    <section class="card" aria-labelledby="usage-h">
+      <div class="section-head">
+        <h2 id="usage-h">Street View usage</h2>
+        <a routerLink="/settings">Details →</a>
+      </div>
+      <app-usage-meter />
+    </section>
+  </div>
+</div>

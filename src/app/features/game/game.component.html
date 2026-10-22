@@ -1,0 +1,155 @@
+@if (state(); as s) {
+  <div class="game" [class.mode-nmpz]="s.session.setup.mode === 'nmpz'">
+    <header class="game-hud" aria-label="Game status">
+      <div class="hud-group">
+        <span class="hud-label">Map</span>
+        <span class="hud-value">{{ s.session.setup.mapName }}</span>
+      </div>
+      <div class="hud-group">
+        <span class="hud-label">Mode</span>
+        <span class="hud-value">{{ modeLabels[s.session.setup.mode] }}</span>
+      </div>
+      <div class="hud-group">
+        <span class="hud-label">Round</span>
+        <span class="hud-value">{{ s.index + 1 }} / {{ s.total }}</span>
+      </div>
+      <div class="hud-group">
+        <span class="hud-label">Score</span>
+        <span class="hud-value">{{ s.totalScore | number }}</span>
+      </div>
+      @if (timerText(); as t) {
+        <div class="hud-group hud-timer" [class.urgent]="timerUrgent()" role="timer" aria-live="off">
+          <span class="hud-label">Time</span>
+          <span class="hud-value big">{{ t }}</span>
+        </div>
+      }
+      <ol class="progress-dots" aria-label="Round progress">
+        @for (i of s.dots; track i) {
+          <li
+            [class.done]="$index < s.scores.length"
+            [class.current]="$index === s.index"
+            [attr.aria-label]="'Round ' + ($index + 1) + ($index < s.scores.length ? ': ' + s.scores[$index] + ' points' : '')"
+          ></li>
+        }
+      </ol>
+      <span class="spacer"></span>
+      @if (s.session.setup.mode === 'moving' && load() === 'ready' && !locked()) {
+        <button type="button" class="btn btn-small" (click)="returnToStart()">Return to start</button>
+      }
+      <button type="button" class="btn btn-small btn-ghost" (click)="quit()">Quit</button>
+    </header>
+
+    <div class="sv-stage">
+      <div #svContainer class="sv-container game-sv" aria-label="Street View"></div>
+      @if (s.session.setup.mode === 'nmpz') {
+        <!-- Blocks drag/wheel/touch: the API has no option to disable mouse panning. -->
+        <div class="nmpz-shield" aria-hidden="true"></div>
+      }
+      @if (load() !== 'ready' && !locked()) {
+        <div class="stage-overlay" role="status">
+          @switch (load()) {
+            @case ('loading') {
+              <p>Loading round {{ s.index + 1 }}…</p>
+            }
+            @case ('blocked') {
+              <div class="overlay-card">
+                <h2>Street View limit reached</h2>
+                <p>{{ loadMessage() }}</p>
+                @if (usage.status(); as u) {
+                  <p class="muted">New Street View viewers are blocked until {{ formatDate(u.nextReset) }}.</p>
+                }
+                <div class="actions">
+                  <button type="button" class="btn" (click)="skipRound()">Skip round (0 points)</button>
+                  <button type="button" class="btn btn-primary" (click)="quit()">Quit game</button>
+                </div>
+              </div>
+            }
+            @case ('no-imagery') {
+              <div class="overlay-card">
+                <h2>No imagery for this location</h2>
+                <p>The saved panorama is unavailable. Fix or remove it in the map editor.</p>
+                <div class="actions">
+                  <button type="button" class="btn btn-primary" (click)="skipRound()">Skip round (0 points)</button>
+                </div>
+              </div>
+            }
+            @case ('error') {
+              <div class="overlay-card">
+                <h2>Street View failed to load</h2>
+                <p>{{ loadMessage() }}</p>
+                <div class="actions">
+                  <button type="button" class="btn" (click)="startRound()">Retry</button>
+                  <button type="button" class="btn btn-primary" (click)="skipRound()">Skip round (0 points)</button>
+                </div>
+              </div>
+            }
+          }
+        </div>
+      }
+    </div>
+
+    <aside class="guess-panel" [class.expanded]="mapExpanded()" [class.result]="locked()" aria-label="Guess map">
+      <div class="guess-panel-bar">
+        <span class="small">
+          @if (locked()) {
+            Guess locked
+          } @else if (s.guess) {
+            Guess: {{ formatCoord(s.guess.lat, s.guess.lng) }}
+          } @else {
+            Click the map to place your guess
+          }
+        </span>
+        <button type="button" class="btn-icon" (click)="toggleMap()" [attr.aria-label]="mapExpanded() ? 'Shrink map' : 'Enlarge map'">
+          {{ mapExpanded() ? '⤡' : '⤢' }}
+        </button>
+      </div>
+      <div #guessMap class="leaflet-box guess-map" role="application" aria-label="Map: click to place your guess"></div>
+      @if (!locked()) {
+        <div class="guess-actions">
+          <button type="button" class="btn btn-ghost" (click)="clearGuess()" [disabled]="!s.guess || s.phase === 'submitted'">
+            Clear
+          </button>
+          <button type="button" class="btn btn-primary grow" (click)="submit('manual')" [disabled]="!canSubmit()">
+            Confirm guess <kbd>Space</kbd>
+          </button>
+        </div>
+      }
+    </aside>
+
+    @if (locked() && s.result; as r) {
+      <section class="result-card" aria-live="polite" aria-labelledby="round-result-h">
+        <h2 id="round-result-h">
+          @if (r.reason === 'timeout' && !r.guess) {
+            Time's up!
+          } @else if (r.reason === 'skipped') {
+            Round skipped
+          } @else {
+            Round {{ r.index + 1 }}
+          }
+        </h2>
+        <p class="result-score"><strong>{{ r.score | number }}</strong> <span class="muted">/ 5,000 points</span></p>
+        <div class="score-bar" aria-hidden="true"><div [style.width.%]="r.score / 50"></div></div>
+        <dl class="result-facts">
+          <div><dt>Distance</dt><dd>{{ r.guess ? formatDistance(r.distanceKm) : 'No guess' }}</dd></div>
+          <div><dt>Your guess</dt><dd class="mono">{{ r.guess ? formatCoord(r.guess.lat, r.guess.lng) : '—' }}</dd></div>
+          <div><dt>Correct</dt><dd class="mono">{{ formatCoord(r.actual.lat, r.actual.lng) }}{{ r.locationName ? ' · ' + r.locationName : '' }}</dd></div>
+        </dl>
+        @if (saveError()) {
+          <p class="alert alert-error" role="alert">Could not save results: {{ saveError() }}</p>
+        }
+        <button #nextBtn type="button" class="btn btn-primary btn-large" (click)="next()" [disabled]="saving()">
+          @if (s.isLast) {
+            {{ saving() ? 'Saving…' : saveError() ? 'Retry saving' : 'See final results' }}
+          } @else {
+            Next round
+          }
+          <kbd>Space</kbd>
+        </button>
+      </section>
+    }
+  </div>
+} @else {
+  <div class="page">
+    <p>No game in progress. <a routerLink="/">Back to maps</a></p>
+  </div>
+}

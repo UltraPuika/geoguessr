@@ -1,0 +1,136 @@
+<div class="page page-narrow">
+  <h1>Settings &amp; Street View usage</h1>
+
+  <section class="card" aria-labelledby="usage-h">
+    <h2 id="usage-h">This month</h2>
+    <app-usage-meter />
+    @if (usage.status(); as s) {
+      @if (s.state === 'ok') {
+        <dl class="stats">
+          <div><dt>Billing month (US Pacific)</dt><dd>{{ s.monthKey }}</dd></div>
+          <div><dt>Counted</dt><dd>{{ s.counted | number }}</dd></div>
+          <div><dt>Confirmed loads</dt><dd>{{ s.confirmed | number }}</dd></div>
+          <div><dt>Failed (still counted)</dt><dd>{{ s.failed | number }}</dd></div>
+          <div><dt>Unresolved reservations</dt><dd>{{ s.pending | number }}</dd></div>
+          <div><dt>Next reset</dt><dd>{{ formatDate(s.nextReset) }}</dd></div>
+        </dl>
+      } @else {
+        <div class="alert alert-error" role="alert">
+          <p><strong>New Street View viewers are blocked.</strong> {{ s.message }}</p>
+          <p>
+            Usage data could not be trusted, so the app fails safe. You can rebuild it conservatively: the current month
+            is then treated as fully used and Street View unlocks at the next monthly reset.
+          </p>
+          <button type="button" class="btn btn-danger" (click)="repair()">Rebuild usage tracking (worst case)</button>
+        </div>
+      }
+    }
+  </section>
+
+  <section class="card" aria-labelledby="policy-h">
+    <h2 id="policy-h">How usage is counted</h2>
+    <ul class="bullets">
+      <li>
+        Limit: <strong>{{ config.monthlyLimit | number }}</strong> potentially billable Street View panorama loads per
+        month (set in <code>src/app/config/usage-config.ts</code>), below the assumed
+        {{ config.assumedFreeMonthlyAllowance | number }} free monthly “{{ config.billingSkuName }}” events.
+      </li>
+      <li>One unit is reserved <em>before</em> the Street View viewer is created. The viewer is then reused for the whole page session.</li>
+      <li>
+        @if (config.countProgrammaticLocationChanges) {
+          Conservative mode: switching the viewer to a different location (new round, previewing another spot) also reserves one unit, because Google does not document whether that is billed.
+        } @else {
+          Switching the viewer to another location does not reserve extra units.
+        }
+      </li>
+      <li>Panning, tilting, zooming and walking around in Moving mode never reserve units.</li>
+      <li>Coverage checks use the Street View metadata service, which Google documents as not billed.</li>
+      <li>Failed loads stay counted; units are only returned when no request could have reached Google.</li>
+    </ul>
+    <p class="alert alert-warn">
+      This counter lives only in this browser. Clearing site data, using another browser or device, or editing storage
+      bypasses it, and it cannot see usage from other apps using the same key. It does <strong>not</strong> guarantee
+      zero charges — configure Google Cloud quotas and budget alerts as described in the README.
+    </p>
+    <p class="muted small">Pricing facts verified against Google documentation dated {{ config.docsVerifiedOn }}; they may change.</p>
+  </section>
+
+  @if (usage.status()?.state === 'ok') {
+    <section class="card" aria-labelledby="manual-h">
+      <h2 id="manual-h">Sync with Google Cloud</h2>
+      <p class="muted">
+        If the Google Cloud console shows more Dynamic Street View usage than this counter, add the difference here.
+        The counter can only be increased.
+      </p>
+      <form class="inline-form" (ngSubmit)="addManual()">
+        <label class="sr-only" for="manual-units">Units to add</label>
+        <input id="manual-units" name="units" type="number" min="1" step="1" [(ngModel)]="manualUnits" placeholder="Units" />
+        <button class="btn" type="submit" [disabled]="!manualUnits">Add usage</button>
+      </form>
+    </section>
+  }
+
+  <section class="card" aria-labelledby="months-h">
+    <h2 id="months-h">Monthly records</h2>
+    @if (!history().length) {
+      <p class="muted">No records yet.</p>
+    } @else {
+      <div class="table-wrap">
+        <table class="rounds-table">
+          <thead>
+            <tr>
+              <th scope="col">Month</th>
+              <th scope="col" class="num">Counted</th>
+              <th scope="col" class="num">Confirmed</th>
+              <th scope="col" class="num">Failed</th>
+              <th scope="col" class="num">Manual</th>
+            </tr>
+          </thead>
+          <tbody>
+            @for (m of history(); track m.key) {
+              <tr>
+                <td>{{ m.key }}</td>
+                <td class="num">{{ m.counted | number }}</td>
+                <td class="num">{{ m.confirmed | number }}</td>
+                <td class="num">{{ m.failed | number }}</td>
+                <td class="num">{{ m.manual | number }}</td>
+              </tr>
+            }
+          </tbody>
+        </table>
+      </div>
+    }
+  </section>
+
+  <section class="card" aria-labelledby="api-h">
+    <h2 id="api-h">Google Maps API key</h2>
+    @if (loader.authFailed()) {
+      <p class="alert alert-error">Google rejected the API key. Check its HTTP referrer and API restrictions.</p>
+    } @else if (loader.hasKey) {
+      <p class="alert alert-ok">An API key is configured for this build.</p>
+    } @else {
+      <p class="alert alert-warn">
+        No API key configured. Street View is disabled; map editing, import/export and history still work.
+      </p>
+    }
+  </section>
+
+  <section class="card" aria-labelledby="storage-h">
+    <h2 id="storage-h">Local storage</h2>
+    <p>
+      Maps, game history and usage records are stored in this browser's IndexedDB. They do not sync across devices —
+      use Export on the Maps page to back up or move maps.
+    </p>
+    @if (storageEstimate()) {
+      <p class="muted small">{{ storageEstimate() }}</p>
+    }
+    @if (persisted() === true) {
+      <p class="alert alert-ok">The browser has granted persistent storage.</p>
+    } @else if (persisted() === false) {
+      <p class="muted">
+        Storage is “best effort” and could be evicted under disk pressure.
+        <button type="button" class="btn btn-small" (click)="requestPersist()">Request persistent storage</button>
+      </p>
+    }
+  </section>
+</div>
