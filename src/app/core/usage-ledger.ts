@@ -1,10 +1,11 @@
 import { isMonthKey } from './month';
 
-export type ReservationKind = 'viewer-init' | 'location-change';
+export type ReservationKind = 'viewer-init' | 'location-change' | 'map-load';
 
 export interface UsageMetaRecord {
   type: 'meta';
-  key: 'meta';
+  /** 'meta' for Street View; prefixed (e.g. 'maps:meta') for other counters. */
+  key: string;
   schema: 1;
   createdAt: string;
   /** Latest month that has been recorded; used to detect missing records and clock rollback. */
@@ -96,10 +97,10 @@ export function emptyMonth(key: string, now: Date): UsageMonthRecord {
 
 const isCount = (v: unknown): v is number => typeof v === 'number' && Number.isInteger(v) && v >= 0;
 
-export function isValidMeta(v: unknown): v is UsageMetaRecord {
+export function isValidMeta(v: unknown, expectedKey = 'meta'): v is UsageMetaRecord {
   if (typeof v !== 'object' || v === null) return false;
   const m = v as Record<string, unknown>;
-  return m['type'] === 'meta' && m['key'] === 'meta' && m['schema'] === 1 && isMonthKey(m['latestMonthKey']);
+  return m['type'] === 'meta' && m['key'] === expectedKey && m['schema'] === 1 && isMonthKey(m['latestMonthKey']);
 }
 
 export function isValidMonth(v: unknown, expectedKey: string): v is UsageMonthRecord {

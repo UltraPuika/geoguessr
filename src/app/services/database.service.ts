@@ -1,4 +1,5 @@
 import { Injectable, InjectionToken, inject } from '@angular/core';
+import { MAP_LOAD_CONFIG } from '../config/usage-config';
 import { AppDatabase, DEFAULT_DB_NAME, StorageUnavailableError, openAppDb } from '../data/db';
 import { HistoryRepository, SettingsRepository } from '../data/history-repository';
 import { MapRepository } from '../data/map-repository';
@@ -28,4 +29,5 @@ export class DatabaseService {
   readonly history = new HistoryRepository(this.db);
   readonly settings = new SettingsRepository(this.db);
   readonly usage = new UsageRepository(this.db);
+  readonly mapUsage = new UsageRepository(this.db, MAP_LOAD_CONFIG);
 }

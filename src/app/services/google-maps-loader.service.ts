@@ -77,4 +77,19 @@ export class GoogleMapsLoaderService {
     }
     return (await google.maps.importLibrary('streetView')) as google.maps.StreetViewLibrary;
   }
+
+  /** Libraries for the 2D guess map. Importing them does not create a map (not billed). */
+  async loadMapLibraries(): Promise<{
+    maps: google.maps.MapsLibrary;
+    marker: google.maps.MarkerLibrary;
+    core: google.maps.CoreLibrary;
+  }> {
+    await this.load();
+    const [maps, marker, core] = await Promise.all([
+      google.maps.importLibrary('maps') as Promise<google.maps.MapsLibrary>,
+      google.maps.importLibrary('marker') as Promise<google.maps.MarkerLibrary>,
+      google.maps.importLibrary('core') as Promise<google.maps.CoreLibrary>,
+    ]);
+    return { maps, marker, core };
+  }
 }

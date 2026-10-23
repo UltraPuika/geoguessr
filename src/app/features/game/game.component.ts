@@ -12,7 +12,6 @@ import {
 } from '@angular/core';
 import { DecimalPipe } from '@angular/common';
 import { Router, RouterLink } from '@angular/router';
-import * as L from 'leaflet';
 import { GameSession } from '../../core/game-engine';
 import { GAME_MODE_LABELS, LatLng, RoundResult, SubmitReason } from '../../core/models';
 import { formatDistance } from '../../core/scoring';
@@ -20,17 +19,10 @@ import { ViewTarget } from '../../core/street-view-controller';
 import { RoundTimer, formatClock } from '../../core/timer';
 import { describeStorageError } from '../../data/db';
 import { ActiveGameService } from '../../services/active-game.service';
+import { GuessMapService } from '../../services/guess-map.service';
 import { StreetViewService } from '../../services/street-view.service';
 import { UsageService } from '../../services/usage.service';
-import {
-  ACTUAL_STYLE,
-  GUESS_STYLE,
-  LINE_STYLE,
-  createBaseMap,
-  observeResize,
-  shortestLine,
-  toLatLng,
-} from '../../shared/leaflet';
+import { GuessMapView } from '../../shared/guess-map';
 import { formatCoord, formatDate, isTypingTarget } from '../../shared/util';
 
 type RoundLoad = 'loading' | 'ready' | 'blocked' | 'no-imagery' | 'error';
@@ -44,8 +36,11 @@ type RoundLoad = 'loading' | 'ready' | 'blocked' | 'no-imagery' | 'error';
 export class GameComponent implements OnDestroy {
   private readonly game = inject(ActiveGameService);
   private readonly sv = inject(StreetViewService);
+  private readonly guessMaps = inject(GuessMapService);
   private readonly router = inject(Router);
   protected readonly usage = inject(UsageService);
+  protected readonly mapFallbackReason = this.guessMaps.fallbackReason;
+  protected readonly mapKind = signal<'google' | 'leaflet' | null>(null);
 
   private readonly svEl = viewChild<ElementRef<HTMLElement>>('svContainer');
   private readonly mapEl = viewChild<ElementRef<HTMLElement>>('guessMap');
@@ -103,10 +98,7 @@ export class GameComponent implements OnDestroy {
     return !!s && s.phase === 'guessing' && s.guess !== null;
   });
 
-  private leaflet: L.Map | null = null;
-  private guessMarker: L.CircleMarker | null = null;
-  private resultLayer: L.LayerGroup | null = null;
-  private disposeResize: (() => void) | null = null;
+  private guessView: GuessMapView | null = null;
   private timer: RoundTimer | null = null;
   private timerRound = -1;
   private loadSeq = 0;
@@ -119,7 +111,7 @@ export class GameComponent implements OnDestroy {
       return;
     }
     afterNextRender(() => {
-      this.initMap();
+      void this.initMap();
       void this.startRound();
     });
   }
@@ -129,9 +121,8 @@ export class GameComponent implements OnDestroy {
     this.timer?.stop();
     const el = this.svEl()?.nativeElement;
     if (el) this.sv.detach(el);
-    this.disposeResize?.();
-    this.leaflet?.remove();
-    this.leaflet = null;
+    this.guessView?.dispose();
+    this.guessView = null;
   }
 
   @HostListener('document:visibilitychange')
@@ -158,13 +149,21 @@ export class GameComponent implements OnDestroy {
     }
   }
 
-  private initMap(): void {
+  private async initMap(): Promise<void> {
     const el = this.mapEl()?.nativeElement;
     if (!el) return;
-    this.leaflet = createBaseMap(el, { zoomControl: true });
-    this.resultLayer = L.layerGroup().addTo(this.leaflet);
-    this.leaflet.on('click', (e: L.LeafletMouseEvent) => this.placeGuess(toLatLng(e.latlng)));
-    this.disposeResize = observeResize(this.leaflet, el);
+    const view = await this.guessMaps.create(el);
+    if (this.destroyed) {
+      view.dispose();
+      return;
+    }
+    this.guessView = view;
+    this.mapKind.set(view.kind);
+    view.onClick((p) => this.placeGuess(p));
+    const s = this.game.session();
+    // A guess or result may already exist if the map finished loading late.
+    if (s?.phase === 'submitted' && s.lastResult) view.showResult(s.lastResult.actual, s.lastResult.guess);
+    else if (s?.guess) view.setGuess(s.guess);
   }
 
   private targetFor(s: GameSession): ViewTarget {
@@ -226,19 +225,11 @@ export class GameComponent implements OnDestroy {
 
   protected placeGuess(p: LatLng): void {
     const ok = this.game.mutate((g) => g.placeGuess(p));
-    if (!ok || !this.leaflet) return;
-    if (!this.guessMarker) {
-      this.guessMarker = L.circleMarker([p.lat, p.lng], { ...GUESS_STYLE, interactive: false }).addTo(this.leaflet);
-    } else {
-      this.guessMarker.setLatLng([p.lat, p.lng]);
-    }
+    if (ok) this.guessView?.setGuess(p);
   }
 
   protected clearGuess(): void {
-    if (this.game.mutate((g) => g.clearGuess())) {
-      this.guessMarker?.remove();
-      this.guessMarker = null;
-    }
+    if (this.game.mutate((g) => g.clearGuess())) this.guessView?.setGuess(null);
   }
 
   protected submit(reason: SubmitReason): void {
@@ -255,26 +246,11 @@ export class GameComponent implements OnDestroy {
   }
 
   private showResult(r: RoundResult): void {
-    const map = this.leaflet;
-    if (!map || !this.resultLayer) return;
-    this.guessMarker?.remove();
-    this.guessMarker = null;
-    this.resultLayer.clearLayers();
-    L.circleMarker([r.actual.lat, r.actual.lng], ACTUAL_STYLE).bindTooltip('Correct location').addTo(this.resultLayer);
-    if (r.guess) {
-      const line = shortestLine(r.actual, r.guess);
-      L.polyline(line, LINE_STYLE).addTo(this.resultLayer);
-      L.circleMarker(line[1], GUESS_STYLE).bindTooltip('Your guess').addTo(this.resultLayer);
-      setTimeout(() => {
-        map.invalidateSize();
-        map.fitBounds(L.latLngBounds(line), { padding: [50, 50], maxZoom: 16 });
-      }, 250);
-    } else {
-      setTimeout(() => {
-        map.invalidateSize();
-        map.setView([r.actual.lat, r.actual.lng], 5);
-      }, 250);
-    }
+    const view = this.guessView;
+    if (!view) return;
+    view.showResult(r.actual, r.guess);
+    // Fit again once the panel has grown into its result layout.
+    setTimeout(() => view.refit(), 250);
   }
 
   protected async next(): Promise<void> {
@@ -293,10 +269,9 @@ export class GameComponent implements OnDestroy {
       return;
     }
     if (!this.game.mutate((g) => g.next())) return;
-    this.resultLayer?.clearLayers();
     this.timer?.stop();
     this.timer = null;
-    this.leaflet?.setView([20, 0], 2);
+    this.guessView?.reset();
     await this.startRound();
   }
 

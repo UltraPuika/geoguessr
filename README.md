@@ -104,7 +104,8 @@ APIs & Services → Credentials → your key:
 Google Maps Platform → **Quotas** → select **Maps JavaScript API**. Google offers per-minute and per-day
 request quotas (names vary by API and over time). If a per-day quota applies to your usage, set it to
 about **150 per day** (≈ 4,500/month). When a quota is reached, Google stops serving requests instead of
-billing for them.
+billing for them. If one quota covers both map loads and panoramas, allow for both (the guess map adds
+roughly one load per page session).
 
 Important caveats, from Google's own documentation (*Manage costs*, 2026-10-21):
 
@@ -133,7 +134,7 @@ Verified against Google Maps Platform docs last updated **2026-10-21**:
 | Free usage | 5,000 events per month (per billing account) |
 | Price after free usage | USD 14.00 per 1,000 (first tier) |
 | `StreetViewService` metadata | Not billed (per the Street View guide) |
-| Map loads (Dynamic Maps) | Not used — the guess map is Leaflet + OpenStreetMap |
+| Map loads (Dynamic Maps) | Guess map: "successful map load" of `google.maps.Map`; 10,000 free/month, then USD 7.00 per 1,000 |
 
 Google can change prices and free allowances at any time. The free usage is shared by everything on the
 same billing account.
@@ -172,6 +173,19 @@ How it works:
 7. **Monthly reset.** A new record is started automatically when the Pacific-time month changes. Old
    months are kept.
 8. **Manual sync.** If the Cloud console shows more usage, you can add units (increase only).
+
+### Google guess map and free fallback
+
+During games the guess map is a real Google map while the monthly allowance lasts:
+
+- One `google.maps.Map` is created per page session (1 unit) and reused for every round and game;
+  panning, zooming and clicking are not new loads. A page reload creates a new one.
+- Its own counter (`MAP_LOAD_CONFIG` in `usage-config.ts`) stops at **9,000** per month, below the
+  10,000 free "Dynamic Maps" loads. Settings shows the usage.
+- The pegman is disabled, so the guess map can never open a (billable, answer-revealing) Street View.
+- When the allowance is used up, the counter is unreadable, or there is no key, the game uses the free
+  Leaflet + OpenStreetMap map instead ("free map" in the panel header). The editor and results pages
+  always use the OpenStreetMap map.
 
 ### Uncertainty about billing events
 

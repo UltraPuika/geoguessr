@@ -5,6 +5,7 @@ import { USAGE_CONFIG } from '../../config/usage-config';
 import { UsageMonthRecord } from '../../core/usage-ledger';
 import { describeStorageError } from '../../data/db';
 import { GoogleMapsLoaderService } from '../../services/google-maps-loader.service';
+import { MapUsageService } from '../../services/guess-map.service';
 import { ToastService } from '../../services/toast.service';
 import { UsageService } from '../../services/usage.service';
 import { UsageMeterComponent } from '../../shared/usage-meter.component';
@@ -18,6 +19,7 @@ import { formatDate } from '../../shared/util';
 })
 export class SettingsComponent implements OnInit {
   protected readonly usage = inject(UsageService);
+  protected readonly mapUsage = inject(MapUsageService);
   protected readonly loader = inject(GoogleMapsLoaderService);
   private readonly toast = inject(ToastService);
 
@@ -44,6 +46,7 @@ export class SettingsComponent implements OnInit {
 
   private async reload(): Promise<void> {
     await this.usage.refresh();
+    await this.mapUsage.refresh();
     try {
       this.history.set(await this.usage.history());
     } catch {
@@ -78,6 +81,18 @@ export class SettingsComponent implements OnInit {
       await this.usage.repair();
       await this.reload();
       this.toast.success('Usage tracking rebuilt conservatively.');
+    } catch (err) {
+      this.toast.error(describeStorageError(err));
+    }
+  }
+
+  protected async repairMaps(): Promise<void> {
+    if (!confirm('Rebuild the Google map counter? This month is marked as used up and the free map is used until the reset.')) {
+      return;
+    }
+    try {
+      await this.mapUsage.repair();
+      this.toast.success('Map counter rebuilt.');
     } catch (err) {
       this.toast.error(describeStorageError(err));
     }

@@ -70,6 +70,33 @@
     </section>
   }
 
+  <section class="card" aria-labelledby="maploads-h">
+    <h2 id="maploads-h">Google guess map</h2>
+    @if (mapUsage.status(); as m) {
+      @if (m.state === 'ok') {
+        <div class="usage-row">
+          <span><strong>{{ m.counted | number }}</strong> / {{ m.limit | number }} Google map loads this month</span>
+          <span class="muted">{{ m.remaining | number }} left</span>
+        </div>
+        <div class="bar" role="progressbar" [attr.aria-valuenow]="m.counted" aria-valuemin="0" [attr.aria-valuemax]="m.limit" aria-label="Monthly Google map loads">
+          <div class="bar-fill" [class]="'level-' + m.warningLevel" [style.width.%]="m.percent"></div>
+        </div>
+        @if (m.blocked) {
+          <p class="alert alert-warn">Allowance used up: games use the free map until {{ formatDate(m.nextReset) }}.</p>
+        }
+      } @else {
+        <p class="alert alert-warn">{{ m.message }} Games use the free map.</p>
+        <button type="button" class="btn btn-small" (click)="repairMaps()">Rebuild map counter (worst case)</button>
+      }
+    }
+    <p class="muted small">
+      One Google map is loaded per page session and reused for every round (panning and zooming are free).
+      Limit {{ mapUsage.config.monthlyLimit | number }} of the assumed {{ mapUsage.config.assumedFreeMonthlyAllowance | number }}
+      free monthly “{{ mapUsage.config.billingSkuName }}” loads. After that, or without a key, the free
+      OpenStreetMap map is used.
+    </p>
+  </section>
+
   <section class="card" aria-labelledby="months-h">
     <h2 id="months-h">Monthly records</h2>
     @if (!history().length) {

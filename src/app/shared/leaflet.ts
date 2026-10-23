@@ -38,7 +38,11 @@ export const LINE_STYLE: L.PolylineOptions = { color: '#ffd23f', weight: 3, dash
 
 export function createBaseMap(el: HTMLElement, options: L.MapOptions = {}): L.Map {
   const map = L.map(el, { worldCopyJump: true, minZoom: 1, ...options }).setView([20, 0], 2);
-  L.tileLayer(TILE_CONFIG.url, { attribution: TILE_CONFIG.attribution, maxZoom: TILE_CONFIG.maxZoom }).addTo(map);
+  L.tileLayer(TILE_CONFIG.url, {
+    attribution: TILE_CONFIG.attribution,
+    maxZoom: TILE_CONFIG.maxZoom,
+    subdomains: TILE_CONFIG.subdomains,
+  }).addTo(map);
   return map;
 }
 

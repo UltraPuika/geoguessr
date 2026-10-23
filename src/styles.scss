@@ -982,7 +982,12 @@ input[type='radio'] {
 }
 .size-buttons {
   display: flex;
+  align-items: center;
   gap: 0.15rem;
+}
+.gmap-host {
+  width: 100%;
+  height: 100%;
 }
 
 .compass {

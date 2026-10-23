@@ -24,6 +24,10 @@ export interface UsageLimits {
   monthlyLimit: number;
   warningThresholds: readonly number[];
   billingTimeZone: string;
+  /** Key prefix for an additional counter (e.g. 'maps:'); empty for Street View. */
+  keyPrefix?: string;
+  /** Treat missing records as tampering when other app data exists (Street View only). */
+  detectWipe?: boolean;
 }
 
 type LedgerTx = IDBPTransaction<AppDB, ('usage' | 'maps' | 'games')[], 'readwrite'>;
@@ -42,11 +46,25 @@ export type SettleOutcome = 'confirmed' | 'failed' | 'released';
  * reservations cannot oversubscribe the limit.
  */
 export class UsageRepository {
+  private readonly prefix: string;
+  private readonly detectWipe: boolean;
+
   constructor(
     private readonly db: DbProvider,
     private readonly limits: UsageLimits = USAGE_CONFIG,
     private readonly newId: () => string = createId,
-  ) {}
+  ) {
+    this.prefix = limits.keyPrefix ?? '';
+    this.detectWipe = limits.detectWipe ?? this.prefix === '';
+  }
+
+  private get metaKey(): string {
+    return `${this.prefix}meta`;
+  }
+
+  private isOwnKey(key: string): boolean {
+    return this.prefix ? key.startsWith(this.prefix) : !key.includes(':');
+  }
 
   async getStatus(now: Date = new Date()): Promise<UsageStatus> {
     try {
@@ -83,7 +101,7 @@ export class UsageRepository {
       await tx.done;
       return {
         ok: true,
-        reservation: { id, monthKey: month.key, kind },
+        reservation: { id, monthKey: month.key.slice(this.prefix.length), kind },
         status: this.toStatus({ kind: 'ok', month: updated }, now),
       };
     } catch (err) {
@@ -99,8 +117,9 @@ export class UsageRepository {
     const db = await this.db();
     const tx = db.transaction('usage', 'readwrite');
     const store = tx.objectStore('usage');
-    const rec = await store.get(reservation.monthKey);
-    if (!isValidMonth(rec, reservation.monthKey)) {
+    const fullKey = this.prefix + reservation.monthKey;
+    const rec = await store.get(fullKey);
+    if (!isValidMonth(rec, fullKey)) {
       await tx.done;
       return;
     }
@@ -149,20 +168,21 @@ export class UsageRepository {
    */
   async repairConservatively(now: Date = new Date()): Promise<UsageStatus> {
     const key = monthKeyFor(now, this.limits.billingTimeZone);
+    const fullKey = this.prefix + key;
     const tx = await this.ledgerTx();
     const store = tx.objectStore('usage');
-    const existing = (await store.get(key)) as Partial<UsageMonthRecord> | undefined;
+    const existing = (await store.get(fullKey)) as Partial<UsageMonthRecord> | undefined;
     const prevCount = typeof existing?.counted === 'number' && Number.isFinite(existing.counted) ? existing.counted : 0;
     const counted = Math.max(this.limits.monthlyLimit, Math.ceil(prevCount));
     const meta: UsageMetaRecord = {
       type: 'meta',
-      key: 'meta',
+      key: this.metaKey,
       schema: 1,
       createdAt: now.toISOString(),
       latestMonthKey: key,
     };
     const month = sealMonth({
-      key,
+      key: fullKey,
       counted,
       confirmed: 0,
       failed: 0,
@@ -181,7 +201,8 @@ export class UsageRepository {
     const db = await this.db();
     const all = await db.getAll('usage');
     return all
-      .filter((r): r is UsageMonthRecord => r.type === 'month')
+      .filter((r): r is UsageMonthRecord => r.type === 'month' && this.isOwnKey(r.key))
+      .map((r) => ({ ...r, key: r.key.slice(this.prefix.length) }))
       .sort((a, b) => b.key.localeCompare(a.key));
   }
 
@@ -192,14 +213,18 @@ export class UsageRepository {
 
   private async load(tx: LedgerTx, now: Date): Promise<LoadResult> {
     const key = monthKeyFor(now, this.limits.billingTimeZone);
+    const fullKey = this.prefix + key;
     const store = tx.objectStore('usage');
-    const meta = await store.get('meta');
+    const meta = await store.get(this.metaKey);
 
     if (meta === undefined) {
-      if ((await store.count()) > 0) {
+      const ownKeys = (await store.getAllKeys()).filter((k) => this.isOwnKey(String(k)));
+      if (ownKeys.length > 0) {
         return { kind: 'corrupted', message: 'Usage tracking metadata is missing.', monthKey: key };
       }
-      const otherData = (await tx.objectStore('maps').count()) + (await tx.objectStore('games').count());
+      const otherData = this.detectWipe
+        ? (await tx.objectStore('maps').count()) + (await tx.objectStore('games').count())
+        : 0;
       if (otherData > 0) {
         return {
           kind: 'corrupted',
@@ -209,18 +234,18 @@ export class UsageRepository {
       }
       const newMeta: UsageMetaRecord = {
         type: 'meta',
-        key: 'meta',
+        key: this.metaKey,
         schema: 1,
         createdAt: now.toISOString(),
         latestMonthKey: key,
       };
-      const month = emptyMonth(key, now);
+      const month = emptyMonth(fullKey, now);
       await store.put(newMeta);
       await store.put(month);
       return { kind: 'ok', month };
     }
 
-    if (!isValidMeta(meta)) {
+    if (!isValidMeta(meta, this.metaKey)) {
       return { kind: 'corrupted', message: 'Usage tracking metadata is unreadable.', monthKey: key };
     }
     if (key < meta.latestMonthKey) {
@@ -231,18 +256,18 @@ export class UsageRepository {
       };
     }
 
-    const rec = await store.get(key);
+    const rec = await store.get(fullKey);
     if (rec === undefined) {
       if (key === meta.latestMonthKey) {
         return { kind: 'corrupted', message: "This month's usage record is missing.", monthKey: key };
       }
       // A new calendar month: start a fresh record; earlier months are kept untouched.
-      const month = emptyMonth(key, now);
+      const month = emptyMonth(fullKey, now);
       await store.put(month);
       await store.put({ ...meta, latestMonthKey: key });
       return { kind: 'ok', month };
     }
-    if (!isValidMonth(rec, key)) {
+    if (!isValidMonth(rec, fullKey)) {
       return { kind: 'corrupted', message: "This month's usage record failed its integrity check.", monthKey: key };
     }
     return { kind: 'ok', month: rec };
@@ -258,7 +283,7 @@ export class UsageRepository {
     return {
       state: 'ok',
       message: null,
-      monthKey: m.key,
+      monthKey: m.key.slice(this.prefix.length),
       counted: m.counted,
       confirmed: m.confirmed,
       failed: m.failed,

@@ -40,3 +40,19 @@ export const USAGE_CONFIG = {
 } as const;
 
 export type UsageConfig = typeof USAGE_CONFIG;
+
+/**
+ * Google guess-map loads. SKU "Dynamic Maps" (Essentials): billable event "successful map load"
+ * of `google.maps.Map`; 10,000 free per month, then USD 7.00 per 1,000 (docs dated 2026-10-21).
+ * When this limit is reached, or the counter is unreadable, the free Leaflet map is used instead.
+ */
+export const MAP_LOAD_CONFIG = {
+  monthlyLimit: 9000,
+  assumedFreeMonthlyAllowance: 10000,
+  warningThresholds: [0.8, 0.9, 1.0] as const,
+  billingTimeZone: USAGE_CONFIG.billingTimeZone,
+  keyPrefix: 'maps:',
+  detectWipe: false,
+  loadTimeoutMs: 15000,
+  billingSkuName: 'Dynamic Maps',
+} as const;
