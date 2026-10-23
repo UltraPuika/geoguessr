@@ -960,10 +960,20 @@ input[type='radio'] {
   &.size-1 {
     width: min(480px, calc(100vw - 2rem));
     height: min(380px, calc(100vh - 8rem));
+    &:hover,
+    &:focus-within {
+      width: min(680px, calc(100vw - 2rem));
+      height: min(520px, calc(100vh - 8rem));
+    }
   }
   &.size-2 {
     width: min(50vw, calc(100vw - 2rem));
     height: min(60vh, calc(100vh - 8rem));
+    &:hover,
+    &:focus-within {
+      width: min(60vw, calc(100vw - 2rem));
+      height: min(70vh, calc(100vh - 8rem));
+    }
   }
   &.size-3 {
     width: min(72vw, calc(100vw - 2rem));
@@ -1240,7 +1250,11 @@ input[type='radio'] {
     &.size-0,
     &.size-0:hover,
     &.size-1,
+    &.size-1:hover,
+    &.size-1:focus-within,
     &.size-2,
+    &.size-2:hover,
+    &.size-2:focus-within,
     &.size-3 {
       width: auto;
     }
@@ -1251,10 +1265,14 @@ input[type='radio'] {
         height: 40vh;
       }
     }
-    &.size-1 {
+    &.size-1,
+    &.size-1:hover,
+    &.size-1:focus-within {
       height: 35vh;
     }
-    &.size-2 {
+    &.size-2,
+    &.size-2:hover,
+    &.size-2:focus-within {
       height: 50vh;
     }
     &.size-3 {
