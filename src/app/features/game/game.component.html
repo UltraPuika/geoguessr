@@ -112,8 +112,8 @@
             @if (mapKind() === 'leaflet' && mapFallbackReason()) {
               <span class="small muted" [title]="mapFallbackReason()">free map</span>
             }
-            <button type="button" class="btn-icon" (click)="resizeMap(-1)" [disabled]="mapSize() === 0" aria-label="Smaller map" title="Smaller map">−</button>
-            <button type="button" class="btn-icon" (click)="resizeMap(1)" [disabled]="mapSize() === 3" aria-label="Larger map" title="Larger map">+</button>
+            <button type="button" class="btn-icon" (click)="resizeMap(-1)" [disabled]="mapSize() === 0" aria-label="Smaller map on hover" title="Smaller map on hover">−</button>
+            <button type="button" class="btn-icon" (click)="resizeMap(1)" [disabled]="mapSize() === 3" aria-label="Larger map on hover" title="Larger map on hover">+</button>
           </span>
         }
       </div>
