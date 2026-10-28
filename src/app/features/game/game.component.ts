@@ -312,7 +312,7 @@ export class GameComponent implements OnDestroy {
 }
 
 type MapSize = 0 | 1 | 2 | 3;
-const MAP_SIZE_KEY = 'geoguess.guessMapSize';
+const MAP_SIZE_KEY = 'geoguess.guessMapSize.v2';
 
 function loadMapSize(): MapSize {
   try {
@@ -322,5 +322,5 @@ function loadMapSize(): MapSize {
   } catch {
     // Fall through to default.
   }
-  return 1;
+  return 2;
 }
