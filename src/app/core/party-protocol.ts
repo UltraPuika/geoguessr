@@ -1,4 +1,4 @@
-import { GameMode, GameSetup, LocationOrder, MapLocation, ScoringScale } from './models';
+import { GameMode, GameSetup, LatLng, LocationOrder, MapLocation, ScoringScale } from './models';
 import { DEFAULT_SCORING, isValidLatLng } from './scoring';
 
 /** Namespaces our topics on the shared public MQTT broker. */
@@ -10,12 +10,36 @@ const MAX_ROUNDS = 50;
 // No 0/O/1/I/L so codes can be typed from the screen without confusion.
 const CODE_ALPHABET = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
 
+/** self: every phone plays at its own speed · live: the host starts each round for everyone at once. */
+export type PartyPace = 'self' | 'live';
+
 /** The planned rounds every phone plays, in the same order. */
 export interface PartyGame {
   setup: GameSetup;
   locations: MapLocation[];
   scaleKm: number;
+  pace: PartyPace;
 }
+
+/** One player's answer in a live round, as scored by the host. */
+export interface RevealEntry {
+  playerId: string;
+  name: string;
+  guess: LatLng | null;
+  distanceKm: number | null;
+  score: number;
+}
+
+/**
+ * Where a live party is. Phones start their countdown when a round message arrives; the host closes
+ * the round itself (deadline, everyone answered, or by hand), so a late or stale message cannot
+ * extend it.
+ */
+export type LivePhase =
+  | { kind: 'lobby' }
+  | { kind: 'round'; round: number; durationMs: number | null }
+  | { kind: 'reveal'; round: number; results: RevealEntry[] }
+  | { kind: 'final' };
 
 /** What a phone reports about itself; sent as a full snapshot so reconnects are idempotent. */
 export interface PlayerState {
@@ -34,10 +58,17 @@ export interface BoardEntry extends PlayerState {
 export type HostMessage =
   | { t: 'game'; game: PartyGame }
   | { t: 'board'; entries: BoardEntry[] }
+  | { t: 'phase'; phase: LivePhase }
   | { t: 'closed' }
   | { t: 'offline' };
 
-export type ClientMessage = { t: 'state'; state: PlayerState };
+/**
+ * state: self-paced running score · join/guess: live parties, where the host scores the guess itself.
+ */
+export type ClientMessage =
+  | { t: 'state'; state: PlayerState }
+  | { t: 'join'; playerId: string; name: string }
+  | { t: 'guess'; playerId: string; round: number; guess: LatLng | null };
 
 export function createPartyCode(): string {
   const bytes = new Uint8Array(PARTY_CODE_LENGTH);
@@ -56,6 +87,8 @@ export interface PartyTopics {
   host: string;
   /** Retained, host-published leaderboard. */
   board: string;
+  /** Retained, host-published live phase (live parties only). */
+  phase: string;
   /** Phones publish to state/<playerId>; the host subscribes to the wildcard. */
   state: (playerId: string) => string;
   stateWildcard: string;
@@ -72,6 +105,7 @@ export function partyTopics(code: string): PartyTopics {
   return {
     host: `${base}/host`,
     board: `${base}/board`,
+    phase: `${base}/phase`,
     state: (id) => `${base}/state/${id}`,
     stateWildcard: `${base}/state/+`,
     left: (id) => `${base}/left/${id}`,
@@ -141,7 +175,19 @@ export function isValidPlayerId(v: unknown): v is string {
 
 /** Validates a message from a phone. The host never trusts the shape or the numbers. */
 export function parseClientMessage(raw: unknown, totalRounds: number): ClientMessage | null {
-  if (!isRecord(raw) || raw['t'] !== 'state' || !isRecord(raw['state'])) return null;
+  if (!isRecord(raw)) return null;
+  if (raw['t'] === 'join') {
+    const name = normalizePlayerName(raw['name']);
+    if (!name || !isValidPlayerId(raw['playerId'])) return null;
+    return { t: 'join', playerId: raw['playerId'], name };
+  }
+  if (raw['t'] === 'guess') {
+    const { playerId, round, guess } = raw;
+    if (!isValidPlayerId(playerId) || !isInt(round, 0, totalRounds - 1)) return null;
+    if (guess !== null && !isValidLatLng(guess)) return null;
+    return { t: 'guess', playerId, round, guess: guess && { lat: guess.lat, lng: guess.lng } };
+  }
+  if (raw['t'] !== 'state' || !isRecord(raw['state'])) return null;
   const s = raw['state'];
   const name = normalizePlayerName(s['name']);
   if (!name || !isValidPlayerId(s['playerId'])) return null;
@@ -229,6 +275,52 @@ function parseBoardEntry(v: unknown): BoardEntry | null {
   };
 }
 
+function parseRevealEntry(v: unknown): RevealEntry | null {
+  if (!isRecord(v)) return null;
+  const name = normalizePlayerName(v['name']);
+  if (!name || !isValidPlayerId(v['playerId'])) return null;
+  const { guess, distanceKm, score } = v;
+  if (!isInt(score, 0, DEFAULT_SCORING.maxScore)) return null;
+  if (guess === null) {
+    if (distanceKm !== null) return null;
+    return { playerId: v['playerId'], name, guess: null, distanceKm: null, score };
+  }
+  if (!isValidLatLng(guess) || !isFiniteIn(distanceKm, 0, 25_000)) return null;
+  return {
+    playerId: v['playerId'],
+    name,
+    guess: { lat: guess.lat, lng: guess.lng },
+    distanceKm,
+    score,
+  };
+}
+
+function parsePhase(v: unknown): LivePhase | null {
+  if (!isRecord(v)) return null;
+  switch (v['kind']) {
+    case 'lobby':
+      return { kind: 'lobby' };
+    case 'final':
+      return { kind: 'final' };
+    case 'round': {
+      const { round, durationMs } = v;
+      if (!isInt(round, 0, MAX_ROUNDS - 1)) return null;
+      if (durationMs !== null && !isInt(durationMs, 0, 3_600_000)) return null;
+      return { kind: 'round', round, durationMs };
+    }
+    case 'reveal': {
+      const { round, results } = v;
+      if (!isInt(round, 0, MAX_ROUNDS - 1)) return null;
+      if (!Array.isArray(results) || results.length > MAX_PARTY_PLAYERS) return null;
+      const entries = results.map(parseRevealEntry);
+      if (!entries.every((e) => e !== null)) return null;
+      return { kind: 'reveal', round, results: entries as RevealEntry[] };
+    }
+    default:
+      return null;
+  }
+}
+
 /** Validates a message from the host before a phone acts on it. */
 export function parseHostMessage(raw: unknown): HostMessage | null {
   if (!isRecord(raw)) return null;
@@ -237,6 +329,10 @@ export function parseHostMessage(raw: unknown): HostMessage | null {
       return { t: 'closed' };
     case 'offline':
       return { t: 'offline' };
+    case 'phase': {
+      const phase = parsePhase(raw['phase']);
+      return phase && { t: 'phase', phase };
+    }
     case 'board': {
       const list = raw['entries'];
       if (!Array.isArray(list) || list.length > MAX_PARTY_PLAYERS) return null;
@@ -256,7 +352,13 @@ export function parseHostMessage(raw: unknown): HostMessage | null {
       if (!locations.every((l) => l !== null)) return null;
       return {
         t: 'game',
-        game: { setup, locations: locations as MapLocation[], scaleKm: g['scaleKm'] },
+        game: {
+          setup,
+          locations: locations as MapLocation[],
+          scaleKm: g['scaleKm'],
+          // Hosts from before live parties existed omit it.
+          pace: g['pace'] === 'live' ? 'live' : 'self',
+        },
       };
     }
     default:

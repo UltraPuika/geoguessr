@@ -206,6 +206,32 @@ export class GameSession {
     this.roundStartedAt = null;
     return true;
   }
+
+  /**
+   * Jumps forward to a later round (live parties, where the host sets the pace). Rounds left
+   * unanswered on the way are recorded as skipped with 0 points.
+   */
+  advanceTo(index: number): boolean {
+    if (this.finished || index <= this.roundIndex || index >= this.locations.length) return false;
+    while (this.roundIndex < index) {
+      if (this.roundPhase !== 'submitted') {
+        this.currentGuess = null;
+        this.submit('skipped');
+      }
+      this.next();
+    }
+    return true;
+  }
+
+  /**
+   * Ends the current round because the host closed it. A guess that was placed but not confirmed
+   * was never sent, so it does not count.
+   */
+  closeRound(): RoundResult | null {
+    if (this.finished || this.roundPhase === 'submitted') return null;
+    this.currentGuess = null;
+    return this.submit(this.roundPhase === 'guessing' ? 'timeout' : 'skipped');
+  }
 }
 
 export interface GameSummary {

@@ -70,10 +70,53 @@
                 <strong>{{ me.totalScore | number }}</strong>
                 <span class="muted">/ {{ maxScore() | number }}</span>
               </p>
+              @if (party.isLive() && me.finished && party.myRank(); as rank) {
+                <p class="live-rank">#{{ rank }} of {{ party.board().length }}</p>
+              }
             }
             @if (party.resultId(); as id) {
               <a class="btn" [routerLink]="['/results', id]">Round details</a>
             }
+            @if (party.isLive() && party.me()?.finished !== true && party.livePhase()?.kind !== 'final') {
+              <button type="button" class="btn btn-primary" (click)="start()" [disabled]="starting()">
+                Rejoin the game
+              </button>
+            }
+          </div>
+        } @else if (party.isLive() && party.liveJoined()) {
+          <div class="card party-done" role="status">
+            @switch (party.livePhase()?.kind) {
+              @case ('round') {
+                @if (hasSession()) {
+                  <h1>Round in progress</h1>
+                  <button type="button" class="btn btn-primary btn-large" (click)="resume()">
+                    Back to the game
+                  </button>
+                } @else {
+                  <h1>Starting…</h1>
+                }
+              }
+              @case ('reveal') {
+                @if (hasSession()) {
+                  <h1>Round results are on the big screen</h1>
+                  <button type="button" class="btn btn-primary btn-large" (click)="resume()">
+                    Back to the game
+                  </button>
+                } @else {
+                  <h1>You're in, {{ party.name() }}!</h1>
+                  <p class="muted">You join from the next round.</p>
+                }
+              }
+              @default {
+                <h1>You're in, {{ party.name() }}!</h1>
+                <p class="muted">Waiting for the host to start the game…</p>
+              }
+            }
+          </div>
+        } @else if (party.isLive() && party.livePhase()?.kind === 'final') {
+          <div class="card party-done">
+            <h1>This game has ended</h1>
+            <p class="muted">Final standings are below.</p>
           </div>
         } @else if (party.phase() === 'playing') {
           <div class="card">
@@ -96,6 +139,11 @@
                   : g.setup.timeLimitSec + ' s per round'
               }}
             </p>
+            @if (g.pace === 'live') {
+              <p class="small muted">
+                Live game: the host starts each round for everyone at the same time.
+              </p>
+            }
             <div class="field">
               <label for="player-name">Your name</label>
               <input
@@ -122,7 +170,7 @@
               type="submit"
               [disabled]="starting() || !apiConfigured || party.status() !== 'connected'"
             >
-              {{ starting() ? 'Starting…' : 'Start playing' }}
+              {{ starting() ? 'Starting…' : g.pace === 'live' ? 'Join game' : 'Start playing' }}
             </button>
           </form>
         }
@@ -141,9 +189,11 @@
                 {{
                   p.finished
                     ? 'Finished'
-                    : p.roundsPlayed === 0
-                      ? 'Ready'
-                      : 'Round ' + p.roundsPlayed
+                    : party.isLive()
+                      ? ''
+                      : p.roundsPlayed === 0
+                        ? 'Ready'
+                        : 'Round ' + p.roundsPlayed
                 }}
               </span>
               <strong class="lb-score">{{ p.totalScore | number }}</strong>

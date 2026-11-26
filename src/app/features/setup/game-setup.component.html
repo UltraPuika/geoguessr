@@ -128,11 +128,20 @@
         <button
           class="btn btn-large"
           type="button"
-          (click)="hostParty()"
+          (click)="hostParty('self')"
           [disabled]="starting() || plan().effectiveRounds === 0 || !apiConfigured"
-          title="Show a QR code; players join and play these rounds on their phones"
+          title="Show a QR code; players join and play these rounds on their phones, each at their own pace"
         >
           Host on phones
+        </button>
+        <button
+          class="btn btn-large"
+          type="button"
+          (click)="hostParty('live')"
+          [disabled]="starting() || plan().effectiveRounds === 0 || !apiConfigured"
+          title="Kahoot-style: you start each round for everyone; this screen shows all guesses and the leaderboard after each round"
+        >
+          Host live game
         </button>
         <a class="btn btn-ghost" [routerLink]="['/maps', m.id]">Edit map</a>
       </div>

@@ -151,14 +151,35 @@
         @if (saveError()) {
           <p class="alert alert-error" role="alert">Could not save results: {{ saveError() }}</p>
         }
-        <button #nextBtn type="button" class="btn btn-primary btn-large" (click)="next()" [disabled]="saving()">
-          @if (s.isLast) {
-            {{ saving() ? 'Saving…' : saveError() ? 'Retry saving' : 'See final results' }}
+        @if (live()) {
+          @if (liveReveal(); as rv) {
+            <p class="live-rank">#{{ rv.rank }} of {{ rv.of }} this round</p>
+            @if (party.me(); as me) {
+              <p class="small muted">
+                Overall: #{{ party.myRank() }} · {{ me.totalScore | number }} points
+              </p>
+            }
+            <p class="small muted" role="status">
+              {{ s.isLast ? 'Final results are coming up on the big screen…' : 'Waiting for the host to start the next round…' }}
+            </p>
           } @else {
-            Next round
+            <p class="small muted" role="status">Waiting for the other players…</p>
           }
-          <kbd>Space</kbd>
-        </button>
+          @if (saving()) {
+            <p class="small muted">Saving…</p>
+          } @else if (saveError() && s.finished) {
+            <button type="button" class="btn btn-primary" (click)="finish()">Retry saving</button>
+          }
+        } @else {
+          <button #nextBtn type="button" class="btn btn-primary btn-large" (click)="next()" [disabled]="saving()">
+            @if (s.isLast) {
+              {{ saving() ? 'Saving…' : saveError() ? 'Retry saving' : 'See final results' }}
+            } @else {
+              Next round
+            }
+            <kbd>Space</kbd>
+          </button>
+        }
       </section>
     }
   </div>

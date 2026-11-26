@@ -6,14 +6,17 @@ import {
   OnDestroy,
   afterNextRender,
   computed,
+  effect,
   inject,
   signal,
+  untracked,
   viewChild,
 } from '@angular/core';
 import { DecimalPipe } from '@angular/common';
 import { Router, RouterLink } from '@angular/router';
 import { GameSession } from '../../core/game-engine';
 import { GAME_MODE_LABELS, LatLng, RoundResult, SubmitReason } from '../../core/models';
+import { LivePhase } from '../../core/party-protocol';
 import { formatDistance } from '../../core/scoring';
 import { ViewTarget } from '../../core/street-view-controller';
 import { RoundTimer, formatClock } from '../../core/timer';
@@ -39,7 +42,7 @@ export class GameComponent implements OnDestroy {
   private readonly sv = inject(StreetViewService);
   private readonly guessMaps = inject(GuessMapService);
   private readonly router = inject(Router);
-  private readonly party = inject(PartyClientService);
+  protected readonly party = inject(PartyClientService);
   protected readonly usage = inject(UsageService);
   protected readonly mapFallbackReason = this.guessMaps.fallbackReason;
   protected readonly mapKind = signal<'google' | 'leaflet' | null>(null);
@@ -99,6 +102,17 @@ export class GameComponent implements OnDestroy {
     const s = this.snapshot();
     return !!s && s.phase === 'guessing' && s.guess !== null;
   });
+  /** A live party game: the host starts and ends every round. */
+  protected readonly live = computed(() => {
+    const s = this.snapshot();
+    return !!s && this.party.isLive() && this.party.ownsSession(s.session);
+  });
+  /** Live: the reveal for the round on screen has arrived. */
+  protected readonly liveReveal = computed(() => {
+    const s = this.snapshot();
+    const r = this.party.myReveal();
+    return s && r && r.round === s.index ? r : null;
+  });
 
   private guessView: GuessMapView | null = null;
   private timer: RoundTimer | null = null;
@@ -106,6 +120,7 @@ export class GameComponent implements OnDestroy {
   private loadSeq = 0;
   private submittedAt = 0;
   private destroyed = false;
+  private rendered = false;
 
   constructor() {
     if (!this.game.session()) {
@@ -113,8 +128,24 @@ export class GameComponent implements OnDestroy {
       return;
     }
     afterNextRender(() => {
+      this.rendered = true;
       void this.initMap();
       void this.startRound();
+    });
+    effect(() => {
+      const phase = this.party.livePhase();
+      if (phase && untracked(() => this.live())) untracked(() => this.onLivePhase(phase));
+    });
+    // Live: the host's re-published time left (after a reload or late join) can shorten the round.
+    effect(() => {
+      this.party.roundDeadline();
+      untracked(() => {
+        const s = this.game.session();
+        if (!s || !this.live() || !this.timer || this.timerRound !== s.index || s.phase === 'submitted') return;
+        this.timer.stop();
+        this.timer = null;
+        this.startTimer(s, s.index);
+      });
     });
   }
 
@@ -179,9 +210,15 @@ export class GameComponent implements OnDestroy {
     if (!s || !el || s.isFinished) return;
     const seq = ++this.loadSeq;
     const roundIndex = s.index;
+    const live = this.live();
     this.load.set('loading');
     this.loadMessage.set(null);
-    this.remainingMs.set(s.setup.timeLimitSec === null ? null : s.setup.timeLimitSec * 1000);
+    if (live) {
+      // Live rounds run on the host's clock from the moment the round starts, loaded or not.
+      this.startTimer(s, roundIndex);
+    } else {
+      this.remainingMs.set(s.setup.timeLimitSec === null ? null : s.setup.timeLimitSec * 1000);
+    }
     try {
       await this.sv.attach(el);
       const result = await this.sv.show(this.targetFor(s), s.setup.mode);
@@ -190,7 +227,7 @@ export class GameComponent implements OnDestroy {
         case 'ok':
           this.load.set('ready');
           this.game.mutate((g) => g.markRoundReady());
-          this.startTimer(s, roundIndex);
+          if (!live) this.startTimer(s, roundIndex);
           break;
         case 'blocked':
           this.load.set('blocked');
@@ -216,11 +253,19 @@ export class GameComponent implements OnDestroy {
     if (this.timerRound === roundIndex && this.timer) return;
     this.timer?.stop();
     this.timerRound = roundIndex;
-    const limit = s.setup.timeLimitSec === null ? null : s.setup.timeLimitSec * 1000;
+    let limit = s.setup.timeLimitSec === null ? null : s.setup.timeLimitSec * 1000;
+    if (this.live()) {
+      const deadline = this.party.roundDeadline();
+      limit = deadline === null ? null : Math.max(0, deadline - Date.now());
+    }
     this.timer = new RoundTimer(
       limit,
       (ms) => this.remainingMs.set(ms),
-      () => this.submit('timeout'),
+      () => {
+        // A round still loading cannot time out normally; it counts as skipped.
+        if (this.game.session()?.canSubmit('timeout')) this.submit('timeout');
+        else if (this.live()) this.submit('skipped');
+      },
     );
     this.timer.start();
   }
@@ -239,10 +284,48 @@ export class GameComponent implements OnDestroy {
     if (!result) return;
     const s = this.game.session();
     if (s) this.party.report(s);
+    if (this.live()) this.party.submitGuess(result.index, result.guess);
     this.submittedAt = performance.now();
     this.timer?.stop();
     this.showResult(result);
     setTimeout(() => this.nextBtn()?.nativeElement.focus(), 0);
+  }
+
+  /** Live: follows the host into the next round, the reveal, or the end of the game. */
+  private onLivePhase(phase: LivePhase): void {
+    const s = this.game.session();
+    if (!s || s.isFinished) return;
+    switch (phase.kind) {
+      case 'round':
+        if (phase.round <= s.index) return;
+        this.timer?.stop();
+        this.timer = null;
+        this.game.mutate((g) => g.advanceTo(phase.round));
+        this.guessView?.reset();
+        if (this.rendered) void this.startRound();
+        return;
+      case 'reveal': {
+        if (phase.round < s.index) return;
+        if (phase.round > s.index) this.game.mutate((g) => g.advanceTo(phase.round));
+        this.closeLiveRound();
+        return;
+      }
+      case 'final':
+        this.game.mutate((g) => g.advanceTo(g.totalRounds - 1));
+        this.closeLiveRound();
+        this.game.mutate((g) => g.next());
+        void this.finish();
+        return;
+    }
+  }
+
+  /** The host closed the round before this phone answered. */
+  private closeLiveRound(): void {
+    const result = this.game.mutate((g) => g.closeRound());
+    if (!result) return;
+    this.timer?.stop();
+    this.remainingMs.set(null);
+    this.showResult(result);
   }
 
   protected returnToStart(): void {
@@ -258,6 +341,8 @@ export class GameComponent implements OnDestroy {
   }
 
   protected async next(): Promise<void> {
+    // Live games advance when the host starts the next round.
+    if (this.live()) return;
     // Ignore an advance triggered by the same key press that submitted the guess.
     if (performance.now() - this.submittedAt < 400) return;
     const s = this.game.session();
@@ -311,9 +396,11 @@ export class GameComponent implements OnDestroy {
   protected quit(): void {
     const s = this.game.session();
     const code = this.party.ownsSession(s) ? this.party.code() : null;
-    const message = code
-      ? 'Quit this game? Your current score stays on the party leaderboard, but you cannot continue.'
-      : 'Quit this game? Progress will not be saved.';
+    const message = !code
+      ? 'Quit this game? Progress will not be saved.'
+      : this.live()
+        ? 'Quit this live game? You stop scoring from the next round, but can rejoin from the party page.'
+        : 'Quit this game? Your current score stays on the party leaderboard, but you cannot continue.';
     if (!confirm(message)) return;
     if (s && code) this.party.endSession(s);
     this.game.clear();

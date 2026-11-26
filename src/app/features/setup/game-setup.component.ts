@@ -15,6 +15,7 @@ import {
   ScoringScale,
 } from '../../core/models';
 import { DEFAULT_SCORING, WORLD_DIAGONAL_KM, mapScaleKm } from '../../core/scoring';
+import { PartyPace } from '../../core/party-protocol';
 import { describeStorageError } from '../../data/db';
 import { ActiveGameService, planGame } from '../../services/active-game.service';
 import { DatabaseService } from '../../services/database.service';
@@ -149,7 +150,7 @@ export class GameSetupComponent implements OnInit {
     this.rounds.set(Math.min(50, this.locations().length));
   }
 
-  protected async hostParty(): Promise<void> {
+  protected async hostParty(pace: PartyPace): Promise<void> {
     const map = this.map();
     if (!map || this.starting() || this.plan().effectiveRounds === 0) return;
     if (this.partyHost.board().length && !confirm('A party is already running. End it and start a new one?')) return;
@@ -157,7 +158,7 @@ export class GameSetupComponent implements OnInit {
     try {
       const setup = this.buildSetup(map);
       await this.savePreferences(setup);
-      void this.partyHost.open(planGame(setup, this.locations()));
+      void this.partyHost.open({ ...planGame(setup, this.locations()), pace });
       await this.router.navigate(['/party']);
     } catch (err) {
       this.toast.error(err instanceof Error ? err.message : 'Could not start the party.');

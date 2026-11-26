@@ -1,6 +1,7 @@
 import {
   ChangeDetectionStrategy,
   Component,
+  DestroyRef,
   HostListener,
   computed,
   effect,
@@ -10,13 +11,15 @@ import {
 import { DecimalPipe } from '@angular/common';
 import { Router, RouterLink } from '@angular/router';
 import { GAME_MODE_LABELS } from '../../core/models';
-import { DEFAULT_SCORING } from '../../core/scoring';
+import { DEFAULT_SCORING, formatDistance } from '../../core/scoring';
+import { formatClock } from '../../core/timer';
 import { PartyHostService } from '../../services/party-host.service';
 import { ToastService } from '../../services/toast.service';
+import { RevealMapComponent } from './reveal-map.component';
 
 @Component({
   selector: 'app-party-host',
-  imports: [DecimalPipe, RouterLink],
+  imports: [DecimalPipe, RouterLink, RevealMapComponent],
   changeDetection: ChangeDetectionStrategy.OnPush,
   templateUrl: './party-host.component.html',
 })
@@ -25,7 +28,9 @@ export class PartyHostComponent {
   private readonly router = inject(Router);
   private readonly toast = inject(ToastService);
   protected readonly modeLabels = GAME_MODE_LABELS;
+  protected readonly formatDistance = formatDistance;
   protected readonly qrDataUrl = signal<string | null>(null);
+  private readonly now = signal(Date.now());
 
   protected readonly joinUrl = computed(() => {
     const code = this.host.code();
@@ -38,12 +43,52 @@ export class PartyHostComponent {
   );
   protected readonly isLocalhost = /^(localhost|127\.|\[::1\])/.test(window.location.hostname);
 
+  protected readonly totalRounds = computed(() => this.host.game()?.locations.length ?? 0);
+  protected readonly timerText = computed(() => {
+    const endsAt = this.host.roundEndsAt();
+    return endsAt === null ? null : formatClock(Math.max(0, endsAt - this.now()));
+  });
+  protected readonly timerUrgent = computed(() => {
+    const endsAt = this.host.roundEndsAt();
+    return endsAt !== null && endsAt - this.now() <= 10_000;
+  });
+  protected readonly revealLocation = computed(() => {
+    const phase = this.host.phase();
+    return phase?.kind === 'reveal' ? (this.host.game()?.locations[phase.round] ?? null) : null;
+  });
+  protected readonly podium = computed(() => this.host.board().slice(0, 3));
+
   constructor() {
     effect(() => {
       const url = this.joinUrl();
       this.qrDataUrl.set(null);
       if (url) void this.renderQr(url);
     });
+    const tick = setInterval(() => {
+      if (this.host.roundEndsAt() !== null) this.now.set(Date.now());
+    }, 250);
+    inject(DestroyRef).onDestroy(() => clearInterval(tick));
+  }
+
+  /** Positions gained (positive) or lost since the previous round. */
+  protected rankChange(playerId: string, index: number): number {
+    const before = this.host.previousPositions().get(playerId);
+    return before === undefined ? 0 : before - (index + 1);
+  }
+
+  protected hasAnswered(playerId: string): boolean {
+    return this.host.guesses().has(playerId);
+  }
+
+  protected startOrNext(): void {
+    this.host.nextRound();
+  }
+
+  protected endRound(): void {
+    const missing = this.host.board().length - this.host.answeredCount();
+    if (missing > 0 && !confirm(`End the round now? ${missing} player${missing === 1 ? ' has' : 's have'} not answered and score 0.`))
+      return;
+    this.host.endRound();
   }
 
   @HostListener('window:beforeunload', ['$event'])

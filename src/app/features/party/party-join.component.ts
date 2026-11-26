@@ -51,11 +51,28 @@ export class PartyJoinComponent {
   protected readonly done = computed(
     () => this.party.phase() === 'done' || !!this.party.me()?.finished,
   );
+  protected readonly hasSession = computed(() => {
+    this.activeGame.version();
+    return this.party.ownsSession(this.activeGame.session());
+  });
 
   constructor() {
     effect(() => {
       const code = this.validCode();
       if (code) untracked(() => void this.party.join(code));
+    });
+    // Live: the host started a round, so this phone joins in (also when it joined late).
+    effect(() => {
+      const phase = this.party.livePhase();
+      const game = this.party.game();
+      if (!game || !this.party.isLive() || !this.party.liveJoined() || phase?.kind !== 'round') return;
+      if (untracked(() => this.party.phase() === 'done' || this.hasSession())) return;
+      untracked(() => {
+        const session = this.activeGame.startPlanned(game);
+        this.activeGame.mutate((s) => s.advanceTo(phase.round));
+        this.party.bindSession(session);
+        void this.router.navigate(['/game']);
+      });
     });
   }
 
@@ -95,6 +112,11 @@ export class PartyJoinComponent {
         this.formError.set(
           `This game needs up to ${needed} Street View loads, but this device only has ${status.remaining} left this month.`,
         );
+        return;
+      }
+      if (game.pace === 'live') {
+        // The game itself starts when the host starts a round.
+        this.party.joinLive();
         return;
       }
       const session = this.activeGame.startPlanned(game);

@@ -10,7 +10,9 @@ backend, no accounts, no analytics.
 - **Games:** 1–50 rounds, timer presets (none/15/30/60/120 s/custom), fixed or random order, optional
   repeats, 5,000 points per round, history stored locally
 - **Party mode:** players scan a QR code, enter a name and play on their phones; scores appear on a
-  live leaderboard on the host screen (see [Party mode](#party-mode-play-on-phones))
+  live leaderboard on the host screen. A **live** variant works like Kahoot: the host starts every
+  round for everyone at once and shows all guesses on a map after each round
+  (see [Party mode](#party-mode-play-on-phones))
 - **Cost guard:** persistent monthly Street View counter with a hard stop at 4,500 (configurable)
 
 > ⚠️ This app **cannot guarantee zero Google charges.** It reduces and caps *its own* usage inside one
@@ -236,11 +238,31 @@ Keyboard: Space or Enter submits a placed guess and advances after a result (not
 3. Each round's score appears on the host's leaderboard and on every phone right away. A finished score
    is final, even if the phone reloads. **End party** disconnects everyone.
 
+#### Live game (Kahoot-style)
+
+Click **Host live game** instead. The host screen is meant for a TV or projector; the host does not play.
+
+1. Players join the same way and tap **Join game**. Their names appear in the lobby; click **Start game**.
+2. Every phone gets the round at the same moment. The countdown starts when the round starts, while
+   Street View may still be loading. The host screen shows the timer and who has answered. A guess
+   that is placed when time runs out still counts; a guess that is placed but not confirmed when the
+   host ends the round does not.
+3. The round ends when everyone connected has answered, when time is up, or when you click
+   **End round now**. The host screen then shows a map with every player's pin, the round's scores and
+   the leaderboard with ▲/▼ position changes. Phones show their round rank and overall rank.
+4. Click **Next round**. After the last round, **Show final results** shows a podium. Each phone saves the
+   game to its own history.
+
+Players who join late, or who reload, jump in at the current round; rounds they missed score 0.
+Without a time limit, a round only ends when everyone has answered or when you end it. In live games
+the host computes every score from the guessed coordinates, so phones cannot report made-up scores.
+
 How it works and its limits:
 
 - Messages go through the free public [HiveMQ MQTT broker](https://www.hivemq.com/mqtt/public-mqtt-broker/)
   over a secure WebSocket (`src/app/config/party-config.ts`), so phones can join from any network
-  (same Wi-Fi or mobile data) with no setup. Only the planned rounds, names and scores are sent.
+  (same Wi-Fi or mobile data) with no setup. Only the planned rounds, names, scores and (in live games)
+  guess coordinates are sent.
   **The broker is public:** anyone who knows or finds a party's topic can read those messages. Don't
   use names you want to keep private. Retained party data expires on the broker after 12 hours and is
   cleared when you end the party.
@@ -251,8 +273,9 @@ How it works and its limits:
 - Phones need to reach the same site as the host. Use the GitHub Pages deployment, or for local testing
   run `npm start -- --host 0.0.0.0`, open the host page via your computer's LAN address
   (e.g. `http://192.168.1.20:4200`), and add that origin to the key's referrer restrictions.
-- Scores are reported by the phones. The host checks they are plausible (0–5,000 per played round), but
-  a determined player could cheat. It is meant for friends, not competitions.
+- In self-paced parties, scores are reported by the phones. The host checks they are plausible
+  (0–5,000 per played round), but a determined player could cheat. It is meant for friends, not
+  competitions.
 
 ## Game modes and their limits
 
@@ -361,7 +384,7 @@ import validation, persistence across restarts and schema migration.
 src/app
 ├─ config/        usage-config.ts (limits), tiles-config.ts (Leaflet tiles)
 ├─ core/          pure logic: scoring, timer, game-engine, map-io, month, usage-ledger, party-protocol,
-│                 street-view-controller (single viewer, mode guards, reservations)
+│                 live-party, street-view-controller (single viewer, mode guards, reservations)
 ├─ data/          IndexedDB schema/migrations (idb) and repositories for maps, history, settings, usage
 ├─ services/      Angular wrappers: database, usage, Maps loader, Street View owner, active game, toasts,
 │                 party host/client (MQTT)

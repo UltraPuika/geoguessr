@@ -50,6 +50,7 @@ const game: PartyGame = {
     },
   ],
   scaleKm: 1491.7,
+  pace: 'self',
 };
 
 describe('party codes', () => {
@@ -77,7 +78,8 @@ describe('normalizePlayerName', () => {
 
 describe('parseClientMessage', () => {
   it('accepts a valid snapshot', () => {
-    expect(parseClientMessage(state(), 5)?.state.totalScore).toBe(9000);
+    const msg = parseClientMessage(state(), 5);
+    expect(msg?.t === 'state' && msg.state.totalScore).toBe(9000);
   });
 
   it.each([
@@ -96,6 +98,27 @@ describe('parseClientMessage', () => {
     expect(parseClientMessage({ t: 'game', game }, 5)).toBeNull();
     expect(parseClientMessage(null, 5)).toBeNull();
   });
+
+  it('accepts live joins and guesses', () => {
+    expect(parseClientMessage({ t: 'join', playerId: 'player-1234', name: ' Ann ' }, 5)).toEqual({
+      t: 'join',
+      playerId: 'player-1234',
+      name: 'Ann',
+    });
+    const guess = { t: 'guess', playerId: 'player-1234', round: 4, guess: { lat: 1, lng: 2, x: 1 } };
+    expect(parseClientMessage(guess, 5)).toEqual({ ...guess, guess: { lat: 1, lng: 2 } });
+    expect(parseClientMessage({ ...guess, guess: null }, 5)).toMatchObject({ guess: null });
+  });
+
+  it.each([
+    ['round past the end', { round: 5 }],
+    ['invalid coordinates', { guess: { lat: 95, lng: 0 } }],
+    ['missing guess', { guess: undefined }],
+    ['malformed player id', { playerId: '../x' }],
+  ])('rejects a live guess with %s', (_label, over) => {
+    const guess = { t: 'guess', playerId: 'player-1234', round: 0, guess: { lat: 1, lng: 2 }, ...over };
+    expect(parseClientMessage(guess, 5)).toBeNull();
+  });
 });
 
 describe('parseHostMessage', () => {
@@ -105,6 +128,32 @@ describe('parseHostMessage', () => {
     if (msg?.t !== 'game') return;
     expect(msg.game.locations[0]).toMatchObject({ lat: 46.5, lng: 8.5, heading: 120, notes: '' });
     expect(msg.game.setup.rounds).toBe(1);
+  });
+
+  it('keeps the live pace and treats a missing pace as self-paced', () => {
+    const live = parseHostMessage({ t: 'game', game: { ...game, pace: 'live' } });
+    expect(live?.t === 'game' && live.game.pace).toBe('live');
+    const { pace: _omitted, ...old } = game;
+    const legacy = parseHostMessage({ t: 'game', game: old });
+    expect(legacy?.t === 'game' && legacy.game.pace).toBe('self');
+  });
+
+  it('validates live phases', () => {
+    const entry = { playerId: 'player-1234', name: 'Ann', guess: { lat: 1, lng: 2 }, distanceKm: 12.5, score: 4000 };
+    const reveal = { t: 'phase', phase: { kind: 'reveal', round: 0, results: [entry] } };
+    expect(parseHostMessage(reveal)).toEqual(reveal);
+    expect(parseHostMessage({ t: 'phase', phase: { kind: 'round', round: 2, durationMs: null } })).toEqual({
+      t: 'phase',
+      phase: { kind: 'round', round: 2, durationMs: null },
+    });
+    const bad = (phase: unknown) => parseHostMessage({ t: 'phase', phase });
+    expect(bad({ kind: 'round', round: -1, durationMs: 30_000 })).toBeNull();
+    // A re-published round with no time left is still valid.
+    expect(bad({ kind: 'round', round: 0, durationMs: 0 })).not.toBeNull();
+    expect(bad({ kind: 'round', round: 0, durationMs: 'soon' })).toBeNull();
+    expect(bad({ kind: 'reveal', round: 0, results: [{ ...entry, score: 5001 }] })).toBeNull();
+    expect(bad({ kind: 'reveal', round: 0, results: [{ ...entry, guess: null }] })).toBeNull();
+    expect(bad({ kind: 'party' })).toBeNull();
   });
 
   it('rejects invalid coordinates, modes and empty games', () => {

@@ -185,6 +185,41 @@ describe('GameSession', () => {
     expect(s.guessedRounds).toBe(2);
     expect(s.averageDistanceKm).toBeCloseTo(s.totalDistanceKm / 2, 6);
   });
+
+  it('advanceTo skips missed rounds with 0 points and lands on the target round', () => {
+    const g = make(3);
+    g.markRoundReady();
+    g.placeGuess({ lat: 10, lng: 10 });
+    expect(g.advanceTo(2)).toBe(true);
+    expect(g.index).toBe(2);
+    expect(g.phase).toBe('loading');
+    expect(g.roundResults.map((r) => [r.reason, r.score])).toEqual([
+      ['skipped', 0],
+      ['skipped', 0],
+    ]);
+    expect(g.advanceTo(2)).toBe(false);
+    expect(g.advanceTo(3)).toBe(false);
+  });
+
+  it('advanceTo keeps an already submitted round', () => {
+    const g = make(3);
+    g.markRoundReady();
+    g.placeGuess({ lat: 10, lng: 10 });
+    g.submit('manual');
+    g.advanceTo(1);
+    expect(g.roundResults).toHaveLength(1);
+    expect(g.roundResults[0].score).toBe(5000);
+  });
+
+  it('closeRound ignores an unconfirmed guess', () => {
+    const g = make(2);
+    g.markRoundReady();
+    g.placeGuess({ lat: 10, lng: 10 });
+    expect(g.closeRound()).toMatchObject({ reason: 'timeout', guess: null, score: 0 });
+    expect(g.closeRound()).toBeNull();
+    g.next();
+    expect(g.closeRound()).toMatchObject({ reason: 'skipped' });
+  });
 });
 
 describe('summarizeRounds', () => {

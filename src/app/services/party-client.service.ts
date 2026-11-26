@@ -3,9 +3,11 @@ import type { MqttClient } from 'mqtt';
 import { PARTY_MAX_PAYLOAD_BYTES } from '../config/party-config';
 import { GameSession } from '../core/game-engine';
 import { createId } from '../core/id';
+import { LatLng } from '../core/models';
 import {
   BoardEntry,
   ClientMessage,
+  LivePhase,
   PartyGame,
   PartyTopics,
   PlayerState,
@@ -42,11 +44,31 @@ export class PartyClientService {
     this.rawBoard().map((e) => ({ ...e, you: e.playerId === this.playerId() })),
   );
   readonly me = computed(() => this.board().find((e) => e.you) ?? null);
+  readonly myRank = computed(() => {
+    const i = this.board().findIndex((e) => e.you);
+    return i < 0 ? null : i + 1;
+  });
+
+  readonly isLive = computed(() => this.game()?.pace === 'live');
+  /** Live parties: the host's current phase. */
+  readonly livePhase = signal<LivePhase | null>(null);
+  /** Live parties: this phone has entered a name and is taking part. */
+  readonly liveJoined = signal(false);
+  /** Live parties: when this phone's countdown for the current round ends (local clock). */
+  readonly roundDeadline = signal<number | null>(null);
+  /** Live parties: this phone's line in the current reveal, with its round rank. */
+  readonly myReveal = computed(() => {
+    const phase = this.livePhase();
+    if (phase?.kind !== 'reveal') return null;
+    const i = phase.results.findIndex((r) => r.playerId === this.playerId());
+    return i < 0 ? null : { round: phase.round, rank: i + 1, of: phase.results.length, entry: phase.results[i] };
+  });
 
   private client: MqttClient | null = null;
   private topics: PartyTopics | null = null;
   private session: GameSession | null = null;
   private lastState: PlayerState | null = null;
+  private lastGuess: Extract<ClientMessage, { t: 'guess' }> | null = null;
   private generation = 0;
   private notFoundTimer: ReturnType<typeof setTimeout> | null = null;
   private helloTimer: ReturnType<typeof setInterval> | null = null;
@@ -74,7 +96,7 @@ export class PartyClientService {
       client.on('connect', () => {
         if (gen !== this.generation) return;
         // Ask for the game only once subscribed, so the host's answer cannot be missed.
-        client.subscribe([topics.host, topics.board], { qos: 1 }, () => {
+        client.subscribe([topics.host, topics.board, topics.phase], { qos: 1 }, () => {
           if (gen === this.generation && !this.game()) this.startHello(gen);
         });
         // Re-announce after every reconnect, so the host marks this phone online again.
@@ -131,6 +153,9 @@ export class PartyClientService {
 
   report(s: GameSession, resultId?: string): void {
     if (!this.ownsSession(s)) return;
+    if (resultId) this.resultId.set(resultId);
+    // Live parties are scored by the host from each guess instead.
+    if (this.isLive()) return;
     const results = s.roundResults;
     this.lastState = {
       playerId: this.playerId(),
@@ -139,7 +164,23 @@ export class PartyClientService {
       totalScore: results.reduce((sum, r) => sum + r.score, 0),
       finished: s.isFinished,
     };
-    if (resultId) this.resultId.set(resultId);
+    this.send();
+  }
+
+  /** Live: takes part under the given name; the host adds this phone to the board. */
+  joinLive(): void {
+    if (!this.isLive() || !this.name()) return;
+    this.liveJoined.set(true);
+    saveJoined(this.code(), true);
+    this.phase.set('lobby');
+    this.resultId.set(null);
+    this.send();
+  }
+
+  /** Live: sends this round's answer (null when time ran out without a guess). */
+  submitGuess(round: number, guess: LatLng | null): void {
+    if (!this.isLive() || !this.liveJoined()) return;
+    this.lastGuess = { t: 'guess', playerId: this.playerId(), round, guess };
     this.send();
   }
 
@@ -149,6 +190,14 @@ export class PartyClientService {
     this.report(s);
     this.session = null;
     this.phase.set('done');
+    if (this.isLive() && !s.isFinished) {
+      // Quitting a live game: stop the host waiting for this phone's answers.
+      this.liveJoined.set(false);
+      saveJoined(this.code(), false);
+      const client = this.client;
+      const topics = this.topics;
+      if (client && topics) client.publish(topics.left(this.playerId()), '1', { qos: 1 });
+    }
   }
 
   leave(): void {
@@ -158,16 +207,22 @@ export class PartyClientService {
     const topics = this.topics;
     if (client) {
       // A clean disconnect suppresses the last will, so say goodbye explicitly.
-      if (topics && this.lastState) client.publish(topics.left(this.playerId()), '1', { qos: 1 });
+      if (topics && (this.lastState || this.liveJoined())) {
+        client.publish(topics.left(this.playerId()), '1', { qos: 1 });
+      }
       client.end(false);
     }
     this.client = null;
     this.topics = null;
     this.session = null;
     this.lastState = null;
+    this.lastGuess = null;
     this.code.set(null);
     this.game.set(null);
     this.rawBoard.set([]);
+    this.livePhase.set(null);
+    this.liveJoined.set(false);
+    this.roundDeadline.set(null);
     this.phase.set('lobby');
     this.resultId.set(null);
     this.status.set('idle');
@@ -176,18 +231,29 @@ export class PartyClientService {
 
   private onMessage(topic: string, payload: Uint8Array): void {
     const topics = this.topics;
-    if (!topics || (topic !== topics.host && topic !== topics.board)) return;
+    if (!topics || (topic !== topics.host && topic !== topics.board && topic !== topics.phase)) return;
     const msg = parseHostMessage(decodePayload(payload, PARTY_MAX_PAYLOAD_BYTES));
     if (!msg) return;
     if (topic === topics.board) {
       if (msg.t === 'board') this.rawBoard.set(msg.entries);
       return;
     }
+    if (topic === topics.phase) {
+      if (msg.t === 'phase') this.onPhase(msg.phase);
+      return;
+    }
     switch (msg.t) {
       case 'game':
         this.clearNotFoundTimer();
         // Keep the first plan; a host reconnect must never swap rounds under a running game.
-        if (!this.game()) this.game.set(msg.game);
+        if (!this.game()) {
+          this.game.set(msg.game);
+          // After a reload, a phone that had joined a live game takes part again automatically.
+          if (msg.game.pace === 'live' && !this.liveJoined() && this.name() && loadJoined(this.code())) {
+            this.liveJoined.set(true);
+            this.send();
+          }
+        }
         this.status.set('connected');
         this.error.set(null);
         break;
@@ -260,12 +326,41 @@ export class PartyClientService {
     this.error.set(message);
   }
 
+  private onPhase(phase: LivePhase): void {
+    const prev = this.livePhase();
+    if (phase.kind === 'round') {
+      const deadline = phase.durationMs === null ? null : Date.now() + phase.durationMs;
+      const current = this.roundDeadline();
+      // A re-delivered copy of the same round (stale retained copy or a fresher re-publish with
+      // the time left) may only shorten the countdown, never extend it.
+      const sameRound = prev?.kind === 'round' && prev.round === phase.round;
+      this.roundDeadline.set(
+        sameRound && current !== null && deadline !== null ? Math.min(current, deadline) : deadline,
+      );
+    } else {
+      this.roundDeadline.set(null);
+    }
+    this.livePhase.set(phase);
+  }
+
   private send(): void {
     const client = this.client;
     const topics = this.topics;
-    if (!client || !topics || !this.lastState) return;
+    if (!client || !topics) return;
+    const topic = topics.state(this.playerId());
     // QoS 1 messages are queued by mqtt.js while offline and delivered after reconnecting.
-    publishJson(client, topics.state(this.lastState.playerId), { t: 'state', state: this.lastState } satisfies ClientMessage);
+    if (this.isLive()) {
+      if (!this.liveJoined() || !this.name()) return;
+      publishJson(client, topic, { t: 'join', playerId: this.playerId(), name: this.name() } satisfies ClientMessage);
+      const phase = this.livePhase();
+      // The host ignores repeats, so resending the current answer after a reconnect is safe.
+      if (this.lastGuess && phase?.kind === 'round' && phase.round === this.lastGuess.round) {
+        publishJson(client, topic, this.lastGuess);
+      }
+      return;
+    }
+    if (!this.lastState) return;
+    publishJson(client, topic, { t: 'state', state: this.lastState } satisfies ClientMessage);
   }
 }
 
@@ -288,5 +383,27 @@ function loadPlayerId(code: string): string {
     return id;
   } catch {
     return createId();
+  }
+}
+
+function joinedKey(code: string | null): string {
+  return `geoguess.party.${code}.joined`;
+}
+
+function loadJoined(code: string | null): boolean {
+  try {
+    return !!code && sessionStorage.getItem(joinedKey(code)) === '1';
+  } catch {
+    return false;
+  }
+}
+
+function saveJoined(code: string | null, joined: boolean): void {
+  if (!code) return;
+  try {
+    if (joined) sessionStorage.setItem(joinedKey(code), '1');
+    else sessionStorage.removeItem(joinedKey(code));
+  } catch {
+    // Convenience only.
   }
 }

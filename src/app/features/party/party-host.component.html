@@ -14,9 +14,124 @@
           · max {{ maxScore() | number }} points
         </p>
       </div>
+      @if (host.isLive() && host.phase()?.kind !== 'lobby' && host.code()) {
+        <p class="live-join-chip" aria-label="Party code">
+          Join: <strong class="mono">{{ host.code() }}</strong>
+        </p>
+      }
       <button type="button" class="btn btn-ghost btn-danger" (click)="end()">End party</button>
     </div>
 
+    @if (host.phase(); as phase) {
+      @switch (phase.kind) {
+        @case ('round') {
+          <section class="card live-round" aria-labelledby="live-round-h">
+            <h2 id="live-round-h">Round {{ phase.round + 1 }} / {{ totalRounds() }}</h2>
+            @if (timerText(); as t) {
+              <p class="live-timer" [class.urgent]="timerUrgent()" role="timer">{{ t }}</p>
+            } @else {
+              <p class="muted">No time limit</p>
+            }
+            <p class="live-answered" aria-live="polite">
+              <strong>{{ host.answeredCount() }}</strong> / {{ host.board().length }} answered
+            </p>
+            <ul class="live-players">
+              @for (p of host.board(); track p.playerId) {
+                <li [class.answered]="hasAnswered(p.playerId)" [class.offline]="!p.connected">
+                  {{ hasAnswered(p.playerId) ? '✓' : '…' }} {{ p.name }}
+                </li>
+              }
+            </ul>
+            <button type="button" class="btn btn-primary btn-large" (click)="endRound()">
+              End round now
+            </button>
+          </section>
+        }
+        @case ('reveal') {
+          <div class="live-reveal">
+            @if (revealLocation(); as loc) {
+              <section class="card live-reveal-map" aria-labelledby="reveal-h">
+                <h2 id="reveal-h">
+                  Round {{ phase.round + 1 }} / {{ totalRounds() }}{{ loc.name ? ': ' + loc.name : '' }}
+                </h2>
+                <app-reveal-map [actual]="loc" [results]="phase.results" />
+              </section>
+            }
+            <div class="live-reveal-side">
+              <section class="card" aria-labelledby="round-scores-h">
+                <h2 id="round-scores-h">This round</h2>
+                <ol class="leaderboard">
+                  @for (r of phase.results; track r.playerId) {
+                    <li>
+                      <span class="lb-rank">{{ $index + 1 }}</span>
+                      <span class="lb-name">{{ r.name }}</span>
+                      <span class="lb-progress small muted">
+                        {{ r.guess ? formatDistance(r.distanceKm) : 'No guess' }}
+                      </span>
+                      <strong class="lb-score">{{ r.score | number }}</strong>
+                      <span></span>
+                    </li>
+                  }
+                </ol>
+              </section>
+              <section class="card" aria-labelledby="standings-h">
+                <h2 id="standings-h">Leaderboard</h2>
+                <ol class="leaderboard">
+                  @for (p of host.board(); track p.playerId) {
+                    <li [class.offline]="!p.connected">
+                      <span class="lb-rank">{{ $index + 1 }}</span>
+                      <span class="lb-name">{{ p.name }}</span>
+                      <span class="lb-progress small">
+                        @if (rankChange(p.playerId, $index); as d) {
+                          <span [class]="d > 0 ? 'rank-up' : 'rank-down'">
+                            {{ d > 0 ? '▲' : '▼' }} {{ d > 0 ? d : -d }}
+                          </span>
+                        }
+                      </span>
+                      <strong class="lb-score">{{ p.totalScore | number }}</strong>
+                      <span></span>
+                    </li>
+                  }
+                </ol>
+              </section>
+              <button type="button" class="btn btn-primary btn-large" (click)="startOrNext()">
+                {{ phase.round + 1 >= totalRounds() ? 'Show final results' : 'Next round' }}
+              </button>
+            </div>
+          </div>
+        }
+        @case ('final') {
+          <section class="card live-final" aria-labelledby="final-h">
+            <h2 id="final-h">Final results</h2>
+            <ol class="podium">
+              @for (p of podium(); track p.playerId) {
+                <li [class]="'podium-' + ($index + 1)">
+                  <span class="podium-place">{{ $index + 1 }}</span>
+                  <span class="podium-name">{{ p.name }}</span>
+                  <strong class="podium-score">{{ p.totalScore | number }}</strong>
+                </li>
+              }
+            </ol>
+            @if (host.board().length > 3) {
+              <ol class="leaderboard" start="4">
+                @for (p of host.board().slice(3); track p.playerId) {
+                  <li>
+                    <span class="lb-rank">{{ $index + 4 }}</span>
+                    <span class="lb-name">{{ p.name }}</span>
+                    <span></span>
+                    <strong class="lb-score">{{ p.totalScore | number }}</strong>
+                    <span></span>
+                  </li>
+                }
+              </ol>
+            }
+            <button type="button" class="btn btn-primary btn-large" (click)="end()">End party</button>
+          </section>
+        }
+      }
+    }
+
+    @if (!host.isLive() || host.phase()?.kind === 'lobby') {
     <div class="party-grid">
       <section class="card party-join" aria-labelledby="join-h">
         <h2 id="join-h">Scan to join</h2>
@@ -64,10 +179,14 @@
       </section>
 
       <section class="card party-board" aria-labelledby="board-h">
-        <h2 id="board-h">Leaderboard</h2>
+        <h2 id="board-h">{{ host.isLive() ? 'Players (' + host.board().length + ')' : 'Leaderboard' }}</h2>
         @if (!host.board().length) {
           <p class="muted">
-            Waiting for players… Scores appear here as soon as someone enters a name.
+            {{
+              host.isLive()
+                ? 'Waiting for players… Names appear here as people join.'
+                : 'Waiting for players… Scores appear here as soon as someone enters a name.'
+            }}
           </p>
         } @else {
           <ol class="leaderboard" aria-live="polite">
@@ -82,11 +201,13 @@
                 </span>
                 <span class="lb-progress small muted">
                   {{
-                    p.finished
-                      ? 'Finished'
-                      : p.roundsPlayed === 0
-                        ? 'Ready'
-                        : 'Round ' + p.roundsPlayed + ' / ' + g.locations.length
+                    host.isLive()
+                      ? 'Ready'
+                      : p.finished
+                        ? 'Finished'
+                        : p.roundsPlayed === 0
+                          ? 'Ready'
+                          : 'Round ' + p.roundsPlayed + ' / ' + g.locations.length
                   }}
                 </span>
                 <strong class="lb-score">{{ p.totalScore | number }}</strong>
@@ -103,8 +224,19 @@
             }
           </ol>
         }
+        @if (host.isLive()) {
+          <button
+            type="button"
+            class="btn btn-primary btn-large live-start"
+            (click)="startOrNext()"
+            [disabled]="!host.board().length || host.status() !== 'open'"
+          >
+            Start game
+          </button>
+        }
       </section>
     </div>
+    }
   } @else {
     <div class="empty card">
       <h2>No party running</h2>
