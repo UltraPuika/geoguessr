@@ -1,5 +1,6 @@
 import { Injectable, computed, signal } from '@angular/core';
 import type { DataConnection, Peer, PeerError } from 'peerjs';
+import { peerOptions } from '../config/peer-config';
 import {
   BoardEntry,
   HostMessage,
@@ -43,7 +44,7 @@ export class PartyHostService {
       const { Peer } = await import('peerjs');
       for (let attempt = 0; ; attempt++) {
         const code = createPartyCode();
-        const peer = new Peer(peerIdForCode(code), { debug: 1 });
+        const peer = new Peer(peerIdForCode(code), peerOptions());
         try {
           await waitForOpen(peer);
         } catch (err) {

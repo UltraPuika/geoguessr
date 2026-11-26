@@ -1,5 +1,6 @@
 import { Injectable, computed, signal } from '@angular/core';
 import type { DataConnection, Peer } from 'peerjs';
+import { HAS_TURN_RELAY, peerOptions } from '../config/peer-config';
 import { GameSession } from '../core/game-engine';
 import { createId } from '../core/id';
 import {
@@ -56,7 +57,7 @@ export class PartyClientService {
     try {
       const { Peer } = await import('peerjs');
       if (gen !== this.generation) return;
-      const peer = new Peer({ debug: 1 });
+      const peer = new Peer(peerOptions());
       this.peer = peer;
       peer.on('error', (err) => {
         if (gen !== this.generation) return;
@@ -159,7 +160,12 @@ export class PartyClientService {
     const timeout = setTimeout(() => {
       if (gen === this.generation && this.conn === conn && !conn.open) {
         conn.close();
-        this.lost(gen, 'Timed out connecting to the host. Both devices need internet access.');
+        this.lost(
+          gen,
+          HAS_TURN_RELAY
+            ? 'Timed out connecting to the host. Both devices need internet access.'
+            : 'Timed out connecting to the host. Join the same Wi-Fi as the host screen and try again.',
+        );
       }
     }, 20_000);
     conn.on('open', () => {

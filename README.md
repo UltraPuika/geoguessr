@@ -240,8 +240,13 @@ How it works and its limits:
 
 - Phones connect **peer-to-peer (WebRTC)** to the host tab. The free public [PeerJS](https://peerjs.com)
   server is used only to set up the connection; it sees the devices' IP addresses and the party code,
-  but not maps or scores. Networks that block WebRTC (some corporate or guest Wi-Fi) can stop players
-  from joining. Mobile data usually works.
+  but not maps or scores.
+- **Same Wi-Fi works out of the box.** Phones on mobile data (carrier NAT) or strict networks need a
+  **TURN relay**; without one, joining times out. Get free credentials, e.g. from
+  [Metered](https://www.metered.ca/stun-turn) (free tier is far more than party mode needs; it sends only
+  a few KB per player), then add repository secrets `TURN_URLS` (comma-separated `turn:`/`turns:` URLs),
+  `TURN_USERNAME` and `TURN_CREDENTIAL`, and redeploy. Locally, set `turnServers` in
+  `environment.local.ts`. Like the Maps key, these credentials are visible in the shipped JavaScript.
 - The party exists only in the host tab. Closing or reloading it ends the party; phones keep retrying
   for about a minute if the connection drops.
 - Each phone loads Street View itself, with your API key, and counts against **its own** browser usage
@@ -384,4 +389,4 @@ src/app
 | "Browser storage is full / unavailable" | Leave private mode, allow site data, free disk space, export maps and delete old history. |
 | Maps disappeared | Browser data was cleared or you are in another browser/profile. Import your JSON backup. |
 | Leaflet map grey | OSM tiles blocked by network/extension, or tile usage limits; try another tile provider. |
-| Phone: “Party not found” / stuck on “Connecting” | The host tab must stay open. Check the code; try mobile data instead of a guest Wi-Fi that blocks WebRTC. |
+| Phone: “Party not found” / “Timed out connecting” | The host tab must stay open. Check the code. A timeout means no network path: join the host's Wi-Fi, or configure a TURN relay (see Party mode). |

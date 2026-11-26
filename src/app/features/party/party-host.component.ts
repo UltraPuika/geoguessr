@@ -9,6 +9,7 @@ import {
 } from '@angular/core';
 import { DecimalPipe } from '@angular/common';
 import { Router, RouterLink } from '@angular/router';
+import { HAS_TURN_RELAY } from '../../config/peer-config';
 import { GAME_MODE_LABELS } from '../../core/models';
 import { DEFAULT_SCORING } from '../../core/scoring';
 import { PartyHostService } from '../../services/party-host.service';
@@ -37,6 +38,7 @@ export class PartyHostComponent {
     () => (this.host.game()?.locations.length ?? 0) * DEFAULT_SCORING.maxScore,
   );
   protected readonly isLocalhost = /^(localhost|127\.|\[::1\])/.test(window.location.hostname);
+  protected readonly hasTurnRelay = HAS_TURN_RELAY;
 
   constructor() {
     effect(() => {
