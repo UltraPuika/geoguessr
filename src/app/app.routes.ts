@@ -28,5 +28,20 @@ export const routes: Routes = [
     loadComponent: () => import('./features/settings/settings.component').then((m) => m.SettingsComponent),
     title: 'Settings & usage',
   },
+  {
+    path: 'party',
+    loadComponent: () => import('./features/party/party-host.component').then((m) => m.PartyHostComponent),
+    title: 'Party',
+  },
+  {
+    path: 'join/:code',
+    loadComponent: () => import('./features/party/party-join.component').then((m) => m.PartyJoinComponent),
+    title: 'Join party',
+  },
+  {
+    path: 'join',
+    loadComponent: () => import('./features/party/party-join.component').then((m) => m.PartyJoinComponent),
+    title: 'Join party',
+  },
   { path: '**', redirectTo: '' },
 ];

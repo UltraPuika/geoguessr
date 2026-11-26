@@ -1,0 +1,156 @@
+<div class="page page-narrow party-phone">
+  @if (!validCode()) {
+    <h1>Join a party</h1>
+    @if (code()) {
+      <p class="alert alert-error" role="alert">“{{ code() }}” is not a valid party code.</p>
+    }
+    <form class="card" (ngSubmit)="openCode()" aria-label="Join a party">
+      <div class="field">
+        <label for="party-code">Party code</label>
+        <input
+          id="party-code"
+          name="code"
+          autocomplete="off"
+          autocapitalize="characters"
+          maxlength="6"
+          class="mono"
+          [ngModel]="codeInput()"
+          (ngModelChange)="codeInput.set($event)"
+        />
+      </div>
+      @if (formError()) {
+        <p class="alert alert-error" role="alert">{{ formError() }}</p>
+      }
+      <button class="btn btn-primary btn-large" type="submit">Join</button>
+    </form>
+  } @else {
+    @switch (party.status()) {
+      @case ('connecting') {
+        <p class="muted" role="status">Connecting to party {{ validCode() }}…</p>
+      }
+      @case ('error') {
+        <div class="card">
+          <h1>Could not join</h1>
+          <p class="alert alert-error" role="alert">{{ party.error() }}</p>
+          <div class="actions">
+            <button type="button" class="btn btn-primary" (click)="party.retry()">Try again</button>
+            <button type="button" class="btn btn-ghost" (click)="leave()">
+              Enter another code
+            </button>
+          </div>
+        </div>
+      }
+      @case ('closed') {
+        <div class="card">
+          <h1>Party ended</h1>
+          <p class="muted">The host closed the party. Final standings are below.</p>
+        </div>
+      }
+    }
+
+    @if (party.status() === 'reconnecting') {
+      <p class="alert alert-warn" role="status">
+        Reconnecting to the host… Your score is sent once it is back.
+      </p>
+    }
+
+    @if (party.game(); as g) {
+      @if (party.status() !== 'error' && party.status() !== 'closed') {
+        @if (done()) {
+          <div class="card party-done">
+            <h1>
+              {{
+                party.phase() === 'done' && party.me()?.finished === false
+                  ? 'You left the game'
+                  : 'Finished!'
+              }}
+            </h1>
+            @if (party.me(); as me) {
+              <p class="result-score">
+                <strong>{{ me.totalScore | number }}</strong>
+                <span class="muted">/ {{ maxScore() | number }}</span>
+              </p>
+            }
+            @if (party.resultId(); as id) {
+              <a class="btn" [routerLink]="['/results', id]">Round details</a>
+            }
+          </div>
+        } @else if (party.phase() === 'playing') {
+          <div class="card">
+            <h1>Game in progress</h1>
+            <button type="button" class="btn btn-primary btn-large" (click)="resume()">
+              Back to the game
+            </button>
+          </div>
+        } @else {
+          <form class="card" (ngSubmit)="start()" aria-label="Enter your name">
+            <h1>“{{ g.setup.mapName }}”</h1>
+            <p class="muted">
+              {{ modeLabels[g.setup.mode] }} · {{ g.locations.length }} round{{
+                g.locations.length === 1 ? '' : 's'
+              }}
+              ·
+              {{
+                g.setup.timeLimitSec === null
+                  ? 'no time limit'
+                  : g.setup.timeLimitSec + ' s per round'
+              }}
+            </p>
+            <div class="field">
+              <label for="player-name">Your name</label>
+              <input
+                id="player-name"
+                name="name"
+                autocomplete="nickname"
+                enterkeyhint="go"
+                [attr.maxlength]="maxNameLength"
+                [ngModel]="nameInput()"
+                (ngModelChange)="nameInput.set($event)"
+                required
+              />
+            </div>
+            @if (!apiConfigured) {
+              <p class="alert alert-error">
+                No Google Maps API key is configured, so Street View cannot load.
+              </p>
+            }
+            @if (formError()) {
+              <p class="alert alert-error" role="alert">{{ formError() }}</p>
+            }
+            <button
+              class="btn btn-primary btn-large"
+              type="submit"
+              [disabled]="starting() || !apiConfigured || party.status() !== 'connected'"
+            >
+              {{ starting() ? 'Starting…' : 'Start playing' }}
+            </button>
+          </form>
+        }
+      }
+    }
+
+    @if (party.board().length) {
+      <section class="card party-board" aria-labelledby="phone-board-h">
+        <h2 id="phone-board-h">Leaderboard</h2>
+        <ol class="leaderboard" aria-live="polite">
+          @for (p of party.board(); track $index) {
+            <li [class.you]="p.you" [class.offline]="!p.connected" [class.finished]="p.finished">
+              <span class="lb-rank">{{ $index + 1 }}</span>
+              <span class="lb-name">{{ p.name }}{{ p.you ? ' (you)' : '' }}</span>
+              <span class="lb-progress small muted">
+                {{
+                  p.finished
+                    ? 'Finished'
+                    : p.roundsPlayed === 0
+                      ? 'Ready'
+                      : 'Round ' + p.roundsPlayed
+                }}
+              </span>
+              <strong class="lb-score">{{ p.totalScore | number }}</strong>
+            </li>
+          }
+        </ol>
+      </section>
+    }
+  }
+</div>

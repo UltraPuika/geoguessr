@@ -1,13 +1,16 @@
 # GeoGuess Personal
 
-A private, single-player GeoGuessr-style game. Build maps from your own Street View spots, then play
-them alone or pass the device around. Static site (GitHub Pages), no backend, no accounts, no analytics.
+A private GeoGuessr-style game. Build maps from your own Street View spots, then play them alone, pass
+the device around, or let friends play on their phones via a QR code. Static site (GitHub Pages), no
+backend, no accounts, no analytics.
 
 - **Modes:** Moving, No Moving, NMPZ (no move/pan/zoom)
 - **Map editor:** click-to-add or enter coordinates, free coverage check, Street View preview, starting
   heading/pitch/zoom, reorder, JSON import/export
 - **Games:** 1–50 rounds, timer presets (none/15/30/60/120 s/custom), fixed or random order, optional
   repeats, 5,000 points per round, history stored locally
+- **Party mode:** players scan a QR code, enter a name and play on their phones; scores appear on a
+  live leaderboard on the host screen (peer-to-peer, see [Party mode](#party-mode-play-on-phones))
 - **Cost guard:** persistent monthly Street View counter with a hard stop at 4,500 (configurable)
 
 > ⚠️ This app **cannot guarantee zero Google charges.** It reduces and caps *its own* usage inside one
@@ -224,6 +227,31 @@ server-side backstop.
 
 Keyboard: Space or Enter submits a placed guess and advances after a result (not while typing in a field).
 
+### Party mode (play on phones)
+
+1. On the setup screen, choose the settings and click **Host on phones**. The host screen shows a QR code,
+   a 6-character party code and a live leaderboard. The host does not play.
+2. Players scan the QR code (or open `#/join` and type the code), enter a name and tap **Start playing**.
+   Everyone gets the same rounds in the same order and plays at their own pace.
+3. Each round's score appears on the host's leaderboard and on every phone right away. A finished score
+   is final, even if the phone reloads. **End party** disconnects everyone.
+
+How it works and its limits:
+
+- Phones connect **peer-to-peer (WebRTC)** to the host tab. The free public [PeerJS](https://peerjs.com)
+  server is used only to set up the connection; it sees the devices' IP addresses and the party code,
+  but not maps or scores. Networks that block WebRTC (some corporate or guest Wi-Fi) can stop players
+  from joining. Mobile data usually works.
+- The party exists only in the host tab. Closing or reloading it ends the party; phones keep retrying
+  for about a minute if the connection drops.
+- Each phone loads Street View itself, with your API key, and counts against **its own** browser usage
+  counter. A 5-round party with 6 players can use up to 30 panorama loads of your Google free allowance.
+- Phones need to reach the same site as the host. Use the GitHub Pages deployment, or for local testing
+  run `npm start -- --host 0.0.0.0`, open the host page via your computer's LAN address
+  (e.g. `http://192.168.1.20:4200`), and add that origin to the key's referrer restrictions.
+- Scores are reported by the phones. The host checks they are plausible (0–5,000 per played round), but
+  a determined player could cheat. It is meant for friends, not competitions.
+
 ## Game modes and their limits
 
 | | Move | Pan/tilt | Zoom |
@@ -330,12 +358,13 @@ import validation, persistence across restarts and schema migration.
 ```
 src/app
 ├─ config/        usage-config.ts (limits), tiles-config.ts (Leaflet tiles)
-├─ core/          pure logic: scoring, timer, game-engine, map-io, month, usage-ledger,
+├─ core/          pure logic: scoring, timer, game-engine, map-io, month, usage-ledger, party-protocol,
 │                 street-view-controller (single viewer, mode guards, reservations)
 ├─ data/          IndexedDB schema/migrations (idb) and repositories for maps, history, settings, usage
-├─ services/      Angular wrappers: database, usage, Maps loader, Street View owner, active game, toasts
+├─ services/      Angular wrappers: database, usage, Maps loader, Street View owner, active game, toasts,
+│                 party host/client (PeerJS)
 ├─ shared/        Leaflet helpers, usage meter, utilities
-└─ features/      home, editor, setup, game, results, history, settings (standalone, lazy-loaded)
+└─ features/      home, editor, setup, game, results, history, settings, party (standalone, lazy-loaded)
 ```
 
 - Angular 22 standalone components, signals, zoneless change detection, strict TypeScript.
@@ -355,3 +384,4 @@ src/app
 | "Browser storage is full / unavailable" | Leave private mode, allow site data, free disk space, export maps and delete old history. |
 | Maps disappeared | Browser data was cleared or you are in another browser/profile. Import your JSON backup. |
 | Leaflet map grey | OSM tiles blocked by network/extension, or tile usage limits; try another tile provider. |
+| Phone: “Party not found” / stuck on “Connecting” | The host tab must stay open. Check the code; try mobile data instead of a guest Wi-Fi that blocks WebRTC. |

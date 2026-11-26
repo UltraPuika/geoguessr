@@ -125,6 +125,15 @@
         >
           {{ starting() ? 'Starting…' : 'Start game' }}
         </button>
+        <button
+          class="btn btn-large"
+          type="button"
+          (click)="hostParty()"
+          [disabled]="starting() || plan().effectiveRounds === 0 || !apiConfigured"
+          title="Show a QR code; players join and play these rounds on their phones"
+        >
+          Host on phones
+        </button>
         <a class="btn btn-ghost" [routerLink]="['/maps', m.id]">Edit map</a>
       </div>
     </form>

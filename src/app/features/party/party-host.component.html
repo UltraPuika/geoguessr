@@ -1,0 +1,115 @@
+<div class="page">
+  @if (host.game(); as g) {
+    <div class="section-head">
+      <div>
+        <h1>Party: “{{ g.setup.mapName }}”</h1>
+        <p class="muted">
+          {{ modeLabels[g.setup.mode] }} · {{ g.locations.length }} round{{
+            g.locations.length === 1 ? '' : 's'
+          }}
+          ·
+          {{
+            g.setup.timeLimitSec === null ? 'no time limit' : g.setup.timeLimitSec + ' s per round'
+          }}
+          · max {{ maxScore() | number }} points
+        </p>
+      </div>
+      <button type="button" class="btn btn-ghost btn-danger" (click)="end()">End party</button>
+    </div>
+
+    <div class="party-grid">
+      <section class="card party-join" aria-labelledby="join-h">
+        <h2 id="join-h">Scan to join</h2>
+        @switch (host.status()) {
+          @case ('starting') {
+            <p class="muted" role="status">Opening the party…</p>
+          }
+          @case ('error') {
+            <p class="alert alert-error" role="alert">{{ host.error() }}</p>
+            <button type="button" class="btn btn-primary" (click)="retry()">Try again</button>
+          }
+          @case ('open') {
+            <div class="party-qr">
+              @if (qrDataUrl(); as src) {
+                <img
+                  [src]="src"
+                  width="480"
+                  height="480"
+                  alt="QR code linking to this party's join page"
+                />
+              } @else {
+                <span class="muted">Generating QR code…</span>
+              }
+            </div>
+            <p class="party-code" aria-label="Party code">{{ host.code() }}</p>
+            <p class="small muted party-url">
+              <a [href]="joinUrl()" target="_blank" rel="noopener">{{ joinUrl() }}</a>
+            </p>
+            <button type="button" class="btn btn-small" (click)="copyLink()">Copy link</button>
+            @if (host.error()) {
+              <p class="alert alert-warn small">{{ host.error() }}</p>
+            }
+            @if (isLocalhost) {
+              <p class="alert alert-warn small">
+                This page runs on localhost, which phones cannot open. Use the deployed site, or
+                serve on your network (<code>npm start -- --host 0.0.0.0</code>) and open this page
+                via your computer's LAN address.
+              </p>
+            }
+          }
+        }
+        <p class="small muted">
+          Keep this tab open: the party lives in this browser and ends when it is closed.
+        </p>
+      </section>
+
+      <section class="card party-board" aria-labelledby="board-h">
+        <h2 id="board-h">Leaderboard</h2>
+        @if (!host.board().length) {
+          <p class="muted">
+            Waiting for players… Scores appear here as soon as someone enters a name.
+          </p>
+        } @else {
+          <ol class="leaderboard" aria-live="polite">
+            @for (p of host.board(); track p.playerId) {
+              <li [class.offline]="!p.connected" [class.finished]="p.finished">
+                <span class="lb-rank">{{ $index + 1 }}</span>
+                <span class="lb-name">
+                  {{ p.name }}
+                  @if (!p.connected) {
+                    <span class="small muted">(offline)</span>
+                  }
+                </span>
+                <span class="lb-progress small muted">
+                  {{
+                    p.finished
+                      ? 'Finished'
+                      : p.roundsPlayed === 0
+                        ? 'Ready'
+                        : 'Round ' + p.roundsPlayed + ' / ' + g.locations.length
+                  }}
+                </span>
+                <strong class="lb-score">{{ p.totalScore | number }}</strong>
+                <button
+                  type="button"
+                  class="btn-icon"
+                  (click)="remove(p.playerId, p.name)"
+                  [attr.aria-label]="'Remove ' + p.name"
+                  title="Remove"
+                >
+                  ×
+                </button>
+              </li>
+            }
+          </ol>
+        }
+      </section>
+    </div>
+  } @else {
+    <div class="empty card">
+      <h2>No party running</h2>
+      <p>Pick a map, choose the settings, then use “Host on phones”.</p>
+      <a routerLink="/" class="btn btn-primary">Pick a map</a>
+    </div>
+  }
+</div>

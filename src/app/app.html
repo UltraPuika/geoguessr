@@ -8,6 +8,9 @@
       <a routerLink="/" routerLinkActive="active" [routerLinkActiveOptions]="{ exact: true }">Maps</a>
       <a routerLink="/history" routerLinkActive="active">History</a>
       <a routerLink="/settings" routerLinkActive="active">Settings &amp; usage</a>
+      @if (partyHost.active()) {
+        <a routerLink="/party" routerLinkActive="active">Party ({{ partyHost.board().length }})</a>
+      }
     </nav>
     @if (usage.status(); as s) {
       <a

@@ -16,8 +16,9 @@ import {
 } from '../../core/models';
 import { DEFAULT_SCORING, WORLD_DIAGONAL_KM, mapScaleKm } from '../../core/scoring';
 import { describeStorageError } from '../../data/db';
-import { ActiveGameService } from '../../services/active-game.service';
+import { ActiveGameService, planGame } from '../../services/active-game.service';
 import { DatabaseService } from '../../services/database.service';
+import { PartyHostService } from '../../services/party-host.service';
 import { StreetViewService } from '../../services/street-view.service';
 import { ToastService } from '../../services/toast.service';
 import { UsageService } from '../../services/usage.service';
@@ -49,6 +50,7 @@ export class GameSetupComponent implements OnInit {
   private readonly db = inject(DatabaseService);
   private readonly router = inject(Router);
   private readonly game = inject(ActiveGameService);
+  private readonly partyHost = inject(PartyHostService);
   private readonly toast = inject(ToastService);
   private readonly sv = inject(StreetViewService);
   protected readonly usage = inject(UsageService);
@@ -147,6 +149,48 @@ export class GameSetupComponent implements OnInit {
     this.rounds.set(Math.min(50, this.locations().length));
   }
 
+  protected async hostParty(): Promise<void> {
+    const map = this.map();
+    if (!map || this.starting() || this.plan().effectiveRounds === 0) return;
+    if (this.partyHost.board().length && !confirm('A party is already running. End it and start a new one?')) return;
+    this.starting.set(true);
+    try {
+      const setup = this.buildSetup(map);
+      await this.savePreferences(setup);
+      void this.partyHost.open(planGame(setup, this.locations()));
+      await this.router.navigate(['/party']);
+    } catch (err) {
+      this.toast.error(err instanceof Error ? err.message : 'Could not start the party.');
+    } finally {
+      this.starting.set(false);
+    }
+  }
+
+  private buildSetup(map: GameMap): GameSetup {
+    return {
+      mapId: map.id,
+      mapName: map.name,
+      rounds: this.plan().effectiveRounds,
+      timeLimitSec: this.timeLimitSec(),
+      mode: this.mode(),
+      order: this.order(),
+      allowRepeats: this.allowRepeats(),
+      scoringScale: this.scoringScale(),
+    };
+  }
+
+  private savePreferences(setup: GameSetup): Promise<void> {
+    return this.db.settings
+      .savePreferences({
+        rounds: Math.min(50, Math.max(1, this.rounds())),
+        timeLimitSec: setup.timeLimitSec,
+        mode: setup.mode,
+        allowRepeats: setup.allowRepeats,
+        scoringScale: setup.scoringScale,
+      })
+      .catch(() => undefined);
+  }
+
   protected async start(): Promise<void> {
     const map = this.map();
     if (!map || this.starting() || this.plan().effectiveRounds === 0) return;
@@ -157,25 +201,8 @@ export class GameSetupComponent implements OnInit {
         this.toast.error(this.usageProblem() ?? 'Street View is blocked.');
         return;
       }
-      const setup: GameSetup = {
-        mapId: map.id,
-        mapName: map.name,
-        rounds: this.plan().effectiveRounds,
-        timeLimitSec: this.timeLimitSec(),
-        mode: this.mode(),
-        order: this.order(),
-        allowRepeats: this.allowRepeats(),
-        scoringScale: this.scoringScale(),
-      };
-      await this.db.settings
-        .savePreferences({
-          rounds: Math.min(50, Math.max(1, this.rounds())),
-          timeLimitSec: setup.timeLimitSec,
-          mode: setup.mode,
-          allowRepeats: setup.allowRepeats,
-          scoringScale: setup.scoringScale,
-        })
-        .catch(() => undefined);
+      const setup = this.buildSetup(map);
+      await this.savePreferences(setup);
       this.game.start(setup, this.locations());
       await this.router.navigate(['/game']);
     } catch (err) {

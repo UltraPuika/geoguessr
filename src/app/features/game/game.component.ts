@@ -20,6 +20,7 @@ import { RoundTimer, formatClock } from '../../core/timer';
 import { describeStorageError } from '../../data/db';
 import { ActiveGameService } from '../../services/active-game.service';
 import { GuessMapService } from '../../services/guess-map.service';
+import { PartyClientService } from '../../services/party-client.service';
 import { StreetViewService } from '../../services/street-view.service';
 import { UsageService } from '../../services/usage.service';
 import { GuessMapView } from '../../shared/guess-map';
@@ -38,6 +39,7 @@ export class GameComponent implements OnDestroy {
   private readonly sv = inject(StreetViewService);
   private readonly guessMaps = inject(GuessMapService);
   private readonly router = inject(Router);
+  private readonly party = inject(PartyClientService);
   protected readonly usage = inject(UsageService);
   protected readonly mapFallbackReason = this.guessMaps.fallbackReason;
   protected readonly mapKind = signal<'google' | 'leaflet' | null>(null);
@@ -235,6 +237,8 @@ export class GameComponent implements OnDestroy {
   protected submit(reason: SubmitReason): void {
     const result = this.game.mutate((g) => g.submit(reason));
     if (!result) return;
+    const s = this.game.session();
+    if (s) this.party.report(s);
     this.submittedAt = performance.now();
     this.timer?.stop();
     this.showResult(result);
@@ -277,12 +281,22 @@ export class GameComponent implements OnDestroy {
 
   protected async finish(): Promise<void> {
     if (this.saving()) return;
+    const s = this.game.session();
+    const code = this.party.ownsSession(s) ? this.party.code() : null;
+    // Report the final score before saving locally, so a storage failure cannot hide it from the host.
+    if (s && code) this.party.report(s);
     this.saving.set(true);
     this.saveError.set(null);
     try {
       const id = await this.game.saveFinished();
       this.game.clear();
-      await this.router.navigate(['/results', id]);
+      if (s && code) {
+        this.party.report(s, id);
+        this.party.endSession(s);
+        await this.router.navigate(['/join', code]);
+      } else {
+        await this.router.navigate(['/results', id]);
+      }
     } catch (err) {
       this.saveError.set(describeStorageError(err));
     } finally {
@@ -295,9 +309,15 @@ export class GameComponent implements OnDestroy {
   }
 
   protected quit(): void {
-    if (!confirm('Quit this game? Progress will not be saved.')) return;
+    const s = this.game.session();
+    const code = this.party.ownsSession(s) ? this.party.code() : null;
+    const message = code
+      ? 'Quit this game? Your current score stays on the party leaderboard, but you cannot continue.'
+      : 'Quit this game? Progress will not be saved.';
+    if (!confirm(message)) return;
+    if (s && code) this.party.endSession(s);
     this.game.clear();
-    void this.router.navigate(['/']);
+    void this.router.navigate(code ? ['/join', code] : ['/']);
   }
 
   protected resizeMap(delta: -1 | 1): void {

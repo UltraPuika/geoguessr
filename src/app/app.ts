@@ -4,6 +4,7 @@ import { NavigationEnd, Router, RouterLink, RouterLinkActive, RouterOutlet } fro
 import { filter, map } from 'rxjs';
 import { UsageService } from './services/usage.service';
 import { ToastService } from './services/toast.service';
+import { PartyHostService } from './services/party-host.service';
 
 @Component({
   selector: 'app-root',
@@ -15,6 +16,7 @@ export class App implements OnInit {
   private readonly router = inject(Router);
   protected readonly usage = inject(UsageService);
   protected readonly toast = inject(ToastService);
+  protected readonly partyHost = inject(PartyHostService);
 
   protected readonly inGame = toSignal(
     this.router.events.pipe(
