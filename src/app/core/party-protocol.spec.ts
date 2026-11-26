@@ -1,6 +1,7 @@
 import {
   PartyGame,
   createPartyCode,
+  decodePayload,
   normalizePartyCode,
   normalizePlayerName,
   parseClientMessage,
@@ -120,18 +121,30 @@ describe('parseHostMessage', () => {
 
   it('validates leaderboard entries', () => {
     const entry = {
+      playerId: 'player-1234',
       name: 'Ann',
       roundsPlayed: 1,
       totalScore: 10,
       finished: false,
       connected: true,
-      you: true,
     };
     expect(parseHostMessage({ t: 'board', entries: [entry] })).toEqual({
       t: 'board',
       entries: [entry],
     });
     expect(parseHostMessage({ t: 'board', entries: [{ ...entry, totalScore: '10' }] })).toBeNull();
+    expect(parseHostMessage({ t: 'board', entries: [{ ...entry, playerId: '../x' }] })).toBeNull();
+  });
+});
+
+describe('decodePayload', () => {
+  const bytes = (s: string) => new TextEncoder().encode(s);
+
+  it('parses JSON and ignores empty, oversized or malformed payloads', () => {
+    expect(decodePayload(bytes('{"t":"closed"}'), 100)).toEqual({ t: 'closed' });
+    expect(decodePayload(new Uint8Array(), 100)).toBeNull();
+    expect(decodePayload(bytes('{"t":"closed"}'), 5)).toBeNull();
+    expect(decodePayload(bytes('{oops'), 100)).toBeNull();
   });
 });
 

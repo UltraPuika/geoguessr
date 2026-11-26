@@ -25,7 +25,7 @@
             "browser": "src/main.ts",
             "tsConfig": "tsconfig.app.json",
             "inlineStyleLanguage": "scss",
-            "allowedCommonJsDependencies": ["leaflet", "qrcode", "dijkstrajs", "sdp"],
+            "allowedCommonJsDependencies": ["leaflet", "qrcode", "dijkstrajs"],
             "assets": [
               {
                 "glob": "**/*",

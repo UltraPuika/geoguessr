@@ -25,13 +25,10 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm test
-      - name: Build (API key and optional TURN relay injected from repository secrets)
+      - name: Build (API key injected from repository secret)
         run: npm run build:gh-pages
         env:
           GOOGLE_MAPS_API_KEY: ${{ secrets.GOOGLE_MAPS_API_KEY }}
-          TURN_URLS: ${{ secrets.TURN_URLS }}
-          TURN_USERNAME: ${{ secrets.TURN_USERNAME }}
-          TURN_CREDENTIAL: ${{ secrets.TURN_CREDENTIAL }}
       - uses: actions/upload-pages-artifact@v3
         with:
           path: dist/geoguessr/browser

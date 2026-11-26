@@ -8,10 +8,4 @@
 export const environment = {
   /** Browser key restricted by HTTP referrer and to the Maps JavaScript API only. */
   googleMapsApiKey: 'YOUR_GOOGLE_MAPS_API_KEY',
-  /**
-   * Optional TURN relay for party mode, needed when the host and phones are on different networks
-   * (e.g. phones on mobile data). Like the Maps key, these credentials ship in the public bundle.
-   */
-  turnServers: [] as RTCIceServer[],
-  // turnServers: [{ urls: ['turn:global.relay.metered.ca:80'], username: '…', credential: '…' }],
 };

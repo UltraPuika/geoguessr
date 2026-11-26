@@ -1,27 +1,29 @@
 import { Injectable, computed, signal } from '@angular/core';
-import type { DataConnection, Peer } from 'peerjs';
-import { HAS_TURN_RELAY, peerOptions } from '../config/peer-config';
+import type { MqttClient } from 'mqtt';
+import { PARTY_MAX_PAYLOAD_BYTES } from '../config/party-config';
 import { GameSession } from '../core/game-engine';
 import { createId } from '../core/id';
 import {
+  BoardEntry,
   ClientMessage,
   PartyGame,
+  PartyTopics,
   PlayerState,
-  PublicBoardEntry,
+  decodePayload,
   normalizePlayerName,
   parseHostMessage,
-  peerIdForCode,
+  partyTopics,
 } from '../core/party-protocol';
-import { describePeerError } from './party-host.service';
+import { connectToBroker, describeConnectionError, publishJson } from './party-broker';
 
-export type PartyClientStatus =
-  'idle' | 'connecting' | 'connected' | 'reconnecting' | 'closed' | 'error';
+export type PartyClientStatus = 'idle' | 'connecting' | 'connected' | 'reconnecting' | 'closed' | 'error';
 /** lobby: entering a name · playing: in /game · done: finished or quit */
 export type PartyClientPhase = 'lobby' | 'playing' | 'done';
+export type PhoneBoardEntry = BoardEntry & { you: boolean };
 
 const NAME_KEY = 'geoguess.party.name';
-const RECONNECT_DELAY_MS = 3000;
-const MAX_RECONNECTS = 20;
+/** How long to wait for the host's retained game before reporting the party as missing. */
+const NOT_FOUND_MS = 10_000;
 
 /** The phone side of a party: joins a host, plays its rounds and reports the running score. */
 @Injectable({ providedIn: 'root' })
@@ -30,51 +32,65 @@ export class PartyClientService {
   readonly status = signal<PartyClientStatus>('idle');
   readonly error = signal<string | null>(null);
   readonly game = signal<PartyGame | null>(null);
-  readonly board = signal<PublicBoardEntry[]>([]);
   readonly phase = signal<PartyClientPhase>('lobby');
   readonly name = signal(loadName());
   /** Local history ID of the finished game, for the details link. */
   readonly resultId = signal<string | null>(null);
+  private readonly rawBoard = signal<BoardEntry[]>([]);
+  private readonly playerId = signal('');
+  readonly board = computed<PhoneBoardEntry[]>(() =>
+    this.rawBoard().map((e) => ({ ...e, you: e.playerId === this.playerId() })),
+  );
   readonly me = computed(() => this.board().find((e) => e.you) ?? null);
 
-  private peer: Peer | null = null;
-  private conn: DataConnection | null = null;
+  private client: MqttClient | null = null;
+  private topics: PartyTopics | null = null;
   private session: GameSession | null = null;
-  private playerId = '';
   private lastState: PlayerState | null = null;
   private generation = 0;
-  private reconnects = 0;
-  private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private notFoundTimer: ReturnType<typeof setTimeout> | null = null;
 
   /** Connects to a party, or does nothing if already connected to the same one. */
   async join(code: string): Promise<void> {
     if (this.code() === code && this.status() !== 'error' && this.status() !== 'idle') return;
     this.leave();
     const gen = ++this.generation;
+    const topics = partyTopics(code);
+    const playerId = loadPlayerId(code);
     this.code.set(code);
-    this.playerId = loadPlayerId(code);
+    this.playerId.set(playerId);
+    this.topics = topics;
     this.status.set('connecting');
     try {
-      const { Peer } = await import('peerjs');
-      if (gen !== this.generation) return;
-      const peer = new Peer(peerOptions());
-      this.peer = peer;
-      peer.on('error', (err) => {
+      const client = await connectToBroker({
+        will: { topic: topics.left(playerId), payload: '1', qos: 1, retain: false },
+      });
+      if (gen !== this.generation) {
+        client.end(true);
+        return;
+      }
+      this.client = client;
+      client.on('connect', () => {
         if (gen !== this.generation) return;
-        if (this.status() === 'reconnecting' && err.type === 'peer-unavailable') {
-          this.scheduleReconnect(gen);
-          return;
+        client.subscribe([topics.host, topics.board], { qos: 1 });
+        // Re-announce after every reconnect, so the host marks this phone online again.
+        this.send();
+        if (!this.game()) this.startNotFoundTimer(gen);
+      });
+      client.on('message', (topic, payload) => gen === this.generation && this.onMessage(topic, payload));
+      client.on('offline', () => {
+        if (gen !== this.generation) return;
+        if (this.game()) {
+          this.status.set('reconnecting');
+          this.error.set('Lost connection to the party server.');
         }
-        this.fail(describePeerError(err));
       });
-      peer.on('disconnected', () => {
-        // Only the signalling link dropped; the data channel to the host may still be alive.
-        if (gen === this.generation && !peer.destroyed)
-          setTimeout(() => !peer.destroyed && peer.reconnect(), 2000);
+      client.on('error', (err) => {
+        if (gen === this.generation && !this.game()) this.fail(describeConnectionError(err));
       });
-      peer.once('open', () => gen === this.generation && this.connect(gen));
+      this.startNotFoundTimer(gen, NOT_FOUND_MS + 15_000);
     } catch (err) {
-      if (gen === this.generation) this.fail(describePeerError(err));
+      if (gen === this.generation) this.fail(describeConnectionError(err));
     }
   }
 
@@ -113,7 +129,7 @@ export class PartyClientService {
     if (!this.ownsSession(s)) return;
     const results = s.roundResults;
     this.lastState = {
-      playerId: this.playerId,
+      playerId: this.playerId(),
       name: this.name(),
       roundsPlayed: results.length,
       totalScore: results.reduce((sum, r) => sum + r.score, 0),
@@ -133,111 +149,97 @@ export class PartyClientService {
 
   leave(): void {
     this.generation++;
-    if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
-    this.reconnectTimer = null;
-    this.conn?.close();
-    this.peer?.destroy();
-    this.conn = null;
-    this.peer = null;
+    this.clearNotFoundTimer();
+    const client = this.client;
+    const topics = this.topics;
+    if (client) {
+      // A clean disconnect suppresses the last will, so say goodbye explicitly.
+      if (topics && this.lastState) client.publish(topics.left(this.playerId()), '1', { qos: 1 });
+      client.end(false);
+    }
+    this.client = null;
+    this.topics = null;
     this.session = null;
     this.lastState = null;
-    this.reconnects = 0;
     this.code.set(null);
     this.game.set(null);
-    this.board.set([]);
+    this.rawBoard.set([]);
     this.phase.set('lobby');
     this.resultId.set(null);
     this.status.set('idle');
     this.error.set(null);
   }
 
-  private connect(gen: number): void {
-    const peer = this.peer;
-    const code = this.code();
-    if (!peer || !code || peer.destroyed) return;
-    const conn = peer.connect(peerIdForCode(code), { reliable: true, serialization: 'json' });
-    this.conn = conn;
-    const timeout = setTimeout(() => {
-      if (gen === this.generation && this.conn === conn && !conn.open) {
-        conn.close();
-        this.lost(
-          gen,
-          HAS_TURN_RELAY
-            ? 'Timed out connecting to the host. Both devices need internet access.'
-            : 'Timed out connecting to the host. Join the same Wi-Fi as the host screen and try again.',
-        );
-      }
-    }, 20_000);
-    conn.on('open', () => {
-      clearTimeout(timeout);
-      if (gen !== this.generation || this.conn !== conn) return;
-      this.reconnects = 0;
-      this.status.set('connected');
-      this.error.set(null);
-      this.send();
-    });
-    conn.on('data', (raw) => {
-      if (gen !== this.generation || this.conn !== conn) return;
-      const msg = parseHostMessage(raw);
-      if (!msg) return;
-      switch (msg.t) {
-        case 'game':
-          // Keep the first plan; a reconnect must never swap rounds under a running game.
-          if (!this.game()) this.game.set(msg.game);
-          break;
-        case 'board':
-          this.board.set(msg.entries);
-          break;
-        case 'closed':
-          this.status.set('closed');
-          this.generation++;
-          conn.close();
-          break;
-      }
-    });
-    conn.on('close', () => {
-      clearTimeout(timeout);
-      if (gen === this.generation && this.conn === conn)
-        this.lost(gen, 'Lost connection to the host.');
-    });
-  }
-
-  private lost(gen: number, message: string): void {
-    // Before ever reaching the host there is nothing to resume; report it straight away.
-    if (!this.game()) {
-      this.fail(message);
+  private onMessage(topic: string, payload: Uint8Array): void {
+    const topics = this.topics;
+    if (!topics || (topic !== topics.host && topic !== topics.board)) return;
+    const msg = parseHostMessage(decodePayload(payload, PARTY_MAX_PAYLOAD_BYTES));
+    if (!msg) return;
+    if (topic === topics.board) {
+      if (msg.t === 'board') this.rawBoard.set(msg.entries);
       return;
     }
-    this.status.set('reconnecting');
-    this.error.set(message);
-    this.scheduleReconnect(gen);
+    switch (msg.t) {
+      case 'game':
+        this.clearNotFoundTimer();
+        // Keep the first plan; a host reconnect must never swap rounds under a running game.
+        if (!this.game()) this.game.set(msg.game);
+        this.status.set('connected');
+        this.error.set(null);
+        break;
+      case 'offline':
+        if (this.game()) {
+          this.status.set('reconnecting');
+          this.error.set('The host screen lost its connection. Waiting for it to come back…');
+        }
+        break;
+      case 'closed':
+        this.clearNotFoundTimer();
+        if (!this.game()) {
+          this.fail('This party has ended. Ask the host for the new QR code.');
+          return;
+        }
+        this.status.set('closed');
+        this.generation++;
+        this.client?.end(false);
+        this.client = null;
+        break;
+    }
   }
 
-  private scheduleReconnect(gen: number): void {
-    if (this.reconnectTimer || gen !== this.generation) return;
-    if (++this.reconnects > MAX_RECONNECTS) {
-      this.fail('Could not reconnect to the host. Is the host screen still open?');
-      return;
-    }
-    this.reconnectTimer = setTimeout(() => {
-      this.reconnectTimer = null;
-      if (gen === this.generation) this.connect(gen);
-    }, RECONNECT_DELAY_MS);
+  private startNotFoundTimer(gen: number, ms = NOT_FOUND_MS): void {
+    this.clearNotFoundTimer();
+    this.notFoundTimer = setTimeout(() => {
+      this.notFoundTimer = null;
+      if (gen !== this.generation || this.game()) return;
+      this.fail(
+        this.client?.connected
+          ? 'Party not found. Check the code, and make sure the host screen is still open.'
+          : 'Could not reach the party server. Check the internet connection and try again.',
+      );
+    }, ms);
+  }
+
+  private clearNotFoundTimer(): void {
+    if (this.notFoundTimer) clearTimeout(this.notFoundTimer);
+    this.notFoundTimer = null;
   }
 
   private fail(message: string): void {
+    this.clearNotFoundTimer();
+    this.generation++;
+    this.client?.end(true);
+    this.client = null;
     this.status.set('error');
     this.error.set(message);
   }
 
   private send(): void {
-    const conn = this.conn;
-    if (!conn?.open || !this.lastState) return;
-    try {
-      void conn.send({ t: 'state', state: this.lastState } satisfies ClientMessage);
-    } catch {
-      // The close handler takes over; the latest state is re-sent after reconnecting.
-    }
+    const client = this.client;
+    const topics = this.topics;
+    if (!client || !topics || !this.lastState) return;
+    // QoS 1 messages are queued by mqtt.js while offline and delivered after reconnecting.
+    publishJson(client, topics.state(this.lastState.playerId), { t: 'state', state: this.lastState } satisfies ClientMessage);
   }
 }
 

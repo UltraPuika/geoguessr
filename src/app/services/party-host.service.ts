@@ -1,24 +1,30 @@
 import { Injectable, computed, signal } from '@angular/core';
-import type { DataConnection, Peer, PeerError } from 'peerjs';
-import { peerOptions } from '../config/peer-config';
+import type { MqttClient } from 'mqtt';
+import { PARTY_MAX_PAYLOAD_BYTES } from '../config/party-config';
 import {
   BoardEntry,
   HostMessage,
   MAX_PARTY_PLAYERS,
   PartyGame,
+  PartyTopics,
   PlayerState,
   createPartyCode,
+  decodePayload,
+  isValidPlayerId,
   parseClientMessage,
-  peerIdForCode,
+  partyTopics,
+  playerIdFromTopic,
   rankBoard,
 } from '../core/party-protocol';
+import { connectToBroker, describeConnectionError, publishJson, waitForConnect } from './party-broker';
 
 export type PartyHostStatus = 'idle' | 'starting' | 'open' | 'error';
 
 /**
- * Turns this browser into the party host: phones connect peer-to-peer (WebRTC, signalled by the
- * public PeerJS server), receive the planned rounds and report their scores back. All state lives
- * in this tab, so the party ends when it is closed.
+ * Turns this browser into the party host. The host and phones exchange small JSON messages through
+ * a public MQTT broker: the host publishes the planned rounds and the leaderboard, phones publish
+ * their running score. The host validates everything, so the leaderboard state lives in this tab
+ * and the party ends when it is closed.
  */
 @Injectable({ providedIn: 'root' })
 export class PartyHostService {
@@ -30,60 +36,66 @@ export class PartyHostService {
   readonly board = computed(() => rankBoard([...this.players().values()]));
   readonly active = computed(() => this.game() !== null);
 
-  private peer: Peer | null = null;
-  private readonly conns = new Map<DataConnection, string | null>();
+  private client: MqttClient | null = null;
+  private topics: PartyTopics | null = null;
   private generation = 0;
+  private boardTimer: ReturnType<typeof setTimeout> | null = null;
 
   async open(game: PartyGame): Promise<void> {
     this.close();
     const gen = ++this.generation;
+    const code = createPartyCode();
+    const topics = partyTopics(code);
     this.game.set(game);
     this.status.set('starting');
     this.error.set(null);
     try {
-      const { Peer } = await import('peerjs');
-      for (let attempt = 0; ; attempt++) {
-        const code = createPartyCode();
-        const peer = new Peer(peerIdForCode(code), peerOptions());
-        try {
-          await waitForOpen(peer);
-        } catch (err) {
-          peer.destroy();
-          if ((err as PeerError<string>).type === 'unavailable-id' && attempt < 3) continue;
-          throw err;
-        }
-        if (gen !== this.generation) {
-          peer.destroy();
-          return;
-        }
-        this.peer = peer;
-        this.code.set(code);
-        this.status.set('open');
-        this.listen(peer, gen);
+      const client = await connectToBroker({
+        // If this tab vanishes without "End party", phones learn the host went offline.
+        will: {
+          topic: topics.host,
+          payload: JSON.stringify({ t: 'offline' } satisfies HostMessage),
+          qos: 1,
+          retain: true,
+        },
+      });
+      if (gen !== this.generation) {
+        client.end(true);
         return;
       }
+      this.client = client;
+      this.topics = topics;
+      client.on('connect', () => gen === this.generation && this.announce());
+      client.on('message', (topic, payload) => gen === this.generation && this.onMessage(topic, payload));
+      client.on('offline', () => gen === this.generation && this.error.set('Connection lost. Reconnecting…'));
+      await waitForConnect(client);
+      if (gen !== this.generation) return;
+      this.code.set(code);
+      this.status.set('open');
     } catch (err) {
       if (gen !== this.generation) return;
+      this.client?.end(true);
+      this.client = null;
       this.status.set('error');
-      this.error.set(describePeerError(err));
+      this.error.set(describeConnectionError(err));
     }
   }
 
-  /** Ends the party: tells every phone, then drops all connections. */
+  /** Ends the party: tells every phone, clears the retained board, then disconnects. */
   close(): void {
     this.generation++;
-    for (const conn of this.conns.keys()) {
-      try {
-        if (conn.open) void conn.send({ t: 'closed' } satisfies HostMessage);
-      } catch {
-        // The connection is going away anyway.
-      }
+    if (this.boardTimer) clearTimeout(this.boardTimer);
+    this.boardTimer = null;
+    const client = this.client;
+    const topics = this.topics;
+    this.client = null;
+    this.topics = null;
+    if (client && topics) {
+      publishJson(client, topics.host, { t: 'closed' } satisfies HostMessage, true);
+      // An empty retained payload deletes the stored leaderboard on the broker.
+      client.publish(topics.board, '', { qos: 1, retain: true }, () => client.end());
+      setTimeout(() => client.end(true), 3000);
     }
-    const peer = this.peer;
-    this.peer = null;
-    this.conns.clear();
-    // Give the "closed" messages a moment to leave before tearing down the channels.
-    if (peer) setTimeout(() => peer.destroy(), 300);
     this.players.set(new Map());
     this.game.set(null);
     this.code.set(null);
@@ -95,130 +107,74 @@ export class PartyHostService {
     const next = new Map(this.players());
     if (!next.delete(playerId)) return;
     this.players.set(next);
-    for (const [conn, id] of this.conns) if (id === playerId) this.conns.set(conn, null);
-    this.broadcast();
+    this.publishBoard();
   }
 
-  private listen(peer: Peer, gen: number): void {
-    peer.on('connection', (conn) => this.accept(conn, gen));
-    peer.on('disconnected', () => {
-      // Lost the signalling server only; existing phones stay connected. Reconnect so new phones can join.
-      setTimeout(() => {
-        if (gen === this.generation && !peer.destroyed) peer.reconnect();
-      }, 2000);
-    });
-    peer.on('error', (err) => {
-      if (gen !== this.generation) return;
-      if (err.type === 'peer-unavailable' || err.type === 'webrtc') return;
-      this.error.set(describePeerError(err));
-    });
+  /** (Re)publishes the retained game and board; runs on every (re)connect. */
+  private announce(): void {
+    const client = this.client;
+    const topics = this.topics;
+    const game = this.game();
+    if (!client || !topics || !game) return;
+    this.error.set(null);
+    client.subscribe([topics.stateWildcard, topics.leftWildcard], { qos: 1 });
+    publishJson(client, topics.host, { t: 'game', game } satisfies HostMessage, true);
+    this.publishBoard(true);
   }
 
-  private accept(conn: DataConnection, gen: number): void {
-    conn.on('open', () => {
-      const game = this.game();
-      if (gen !== this.generation || !game || this.conns.size >= MAX_PARTY_PLAYERS * 2) {
-        conn.close();
-        return;
-      }
-      this.conns.set(conn, null);
-      void conn.send({ t: 'game', game } satisfies HostMessage);
-      this.sendBoard(conn);
-    });
-    conn.on('data', (raw) => {
-      const game = this.game();
-      if (gen !== this.generation || !game || !this.conns.has(conn)) return;
-      const msg = parseClientMessage(raw, game.locations.length);
-      if (msg) this.update(conn, msg.state);
-    });
-    const drop = () => {
-      if (!this.conns.has(conn)) return;
-      const id = this.conns.get(conn) ?? null;
-      this.conns.delete(conn);
-      if (id && ![...this.conns.values()].includes(id)) this.patch(id, { connected: false });
-    };
-    conn.on('close', drop);
-    conn.on('error', drop);
+  private onMessage(topic: string, payload: Uint8Array): void {
+    const topics = this.topics;
+    const game = this.game();
+    if (!topics || !game) return;
+    const playerId = playerIdFromTopic(topic);
+    if (!isValidPlayerId(playerId)) return;
+    if (topic === topics.left(playerId)) {
+      this.patch(playerId, { connected: false });
+      return;
+    }
+    if (topic !== topics.state(playerId)) return;
+    const msg = parseClientMessage(decodePayload(payload, PARTY_MAX_PAYLOAD_BYTES), game.locations.length);
+    // The topic and payload must agree, so a phone cannot write into another player's row by accident.
+    if (msg && msg.state.playerId === playerId) this.update(msg.state);
   }
 
-  private update(conn: DataConnection, state: PlayerState): void {
-    const bound = this.conns.get(conn);
-    // One phone, one player: a connection cannot switch identities mid-party.
-    if (bound && bound !== state.playerId) return;
+  private update(state: PlayerState): void {
     const existing = this.players().get(state.playerId);
     // A finished score is final, even if the phone reloads and tries again.
     if (existing?.finished) {
-      this.conns.set(conn, state.playerId);
       this.patch(state.playerId, { connected: true });
       return;
     }
     if (!existing && this.players().size >= MAX_PARTY_PLAYERS) return;
-    this.conns.set(conn, state.playerId);
     const next = new Map(this.players());
     next.set(state.playerId, { ...state, connected: true });
     this.players.set(next);
-    this.broadcast();
+    this.publishBoard();
   }
 
   private patch(playerId: string, change: Partial<BoardEntry>): void {
     const existing = this.players().get(playerId);
     if (!existing) return;
+    if (Object.entries(change).every(([k, v]) => existing[k as keyof BoardEntry] === v)) return;
     const next = new Map(this.players());
     next.set(playerId, { ...existing, ...change });
     this.players.set(next);
-    this.broadcast();
+    this.publishBoard();
   }
 
-  private broadcast(): void {
-    for (const conn of this.conns.keys()) this.sendBoard(conn);
-  }
-
-  private sendBoard(conn: DataConnection): void {
-    if (!conn.open) return;
-    const me = this.conns.get(conn) ?? null;
-    // Player IDs act as secrets for reconnecting, so other phones never see them.
-    const entries = this.board().map(({ playerId, ...rest }) => ({
-      ...rest,
-      you: playerId === me,
-    }));
-    try {
-      void conn.send({ t: 'board', entries } satisfies HostMessage);
-    } catch {
-      // Closed between the check and the send; the close handler cleans up.
-    }
-  }
-}
-
-function waitForOpen(peer: Peer): Promise<void> {
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(
-      () => reject(new Error('Timed out contacting the PeerJS server.')),
-      15_000,
-    );
-    peer.once('open', () => {
-      clearTimeout(timer);
-      resolve();
-    });
-    peer.once('error', (err) => {
-      clearTimeout(timer);
-      reject(err);
-    });
-  });
-}
-
-export function describePeerError(err: unknown): string {
-  const type = (err as Partial<PeerError<string>> | null)?.type;
-  switch (type) {
-    case 'browser-incompatible':
-      return 'This browser does not support WebRTC, which party games need.';
-    case 'network':
-    case 'server-error':
-    case 'socket-error':
-    case 'socket-closed':
-      return 'Could not reach the PeerJS connection server. Check the internet connection and try again.';
-    case 'peer-unavailable':
-      return 'Party not found. Check the code, and make sure the host screen is still open.';
-    default:
-      return err instanceof Error ? err.message : 'The party connection failed.';
+  /** Coalesces bursts (several phones submitting at once) into one retained update. */
+  private publishBoard(immediate = false): void {
+    if (this.boardTimer && !immediate) return;
+    if (this.boardTimer) clearTimeout(this.boardTimer);
+    const send = () => {
+      this.boardTimer = null;
+      const client = this.client;
+      const topics = this.topics;
+      if (client && topics) {
+        publishJson(client, topics.board, { t: 'board', entries: this.board() } satisfies HostMessage, true);
+      }
+    };
+    if (immediate) send();
+    else this.boardTimer = setTimeout(send, 250);
   }
 }

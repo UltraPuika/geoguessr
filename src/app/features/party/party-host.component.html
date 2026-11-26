@@ -49,11 +49,6 @@
             @if (host.error()) {
               <p class="alert alert-warn small">{{ host.error() }}</p>
             }
-            @if (!hasTurnRelay) {
-              <p class="alert alert-info small">
-                Phones should join the same Wi-Fi as this device. Players on mobile data need a TURN relay (see README).
-              </p>
-            }
             @if (isLocalhost) {
               <p class="alert alert-warn small">
                 This page runs on localhost, which phones cannot open. Use the deployed site, or

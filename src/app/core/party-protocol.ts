@@ -1,8 +1,8 @@
 import { GameMode, GameSetup, LocationOrder, MapLocation, ScoringScale } from './models';
 import { DEFAULT_SCORING, isValidLatLng } from './scoring';
 
-/** Namespaces our peer IDs on the shared public PeerJS signalling server. */
-export const PARTY_PEER_PREFIX = 'geoguess-party-v1-';
+/** Namespaces our topics on the shared public MQTT broker. */
+export const PARTY_TOPIC_ROOT = 'geoguess-personal/party/v1';
 export const PARTY_CODE_LENGTH = 6;
 export const MAX_NAME_LENGTH = 24;
 export const MAX_PARTY_PLAYERS = 100;
@@ -30,11 +30,12 @@ export interface BoardEntry extends PlayerState {
   connected: boolean;
 }
 
-/** Leaderboard row as phones see it: no player IDs, just a marker for their own row. */
-export type PublicBoardEntry = Omit<BoardEntry, 'playerId'> & { you: boolean };
-
+/** offline is the host's MQTT last will: the host tab dropped off without ending the party. */
 export type HostMessage =
-  { t: 'game'; game: PartyGame } | { t: 'board'; entries: PublicBoardEntry[] } | { t: 'closed' };
+  | { t: 'game'; game: PartyGame }
+  | { t: 'board'; entries: BoardEntry[] }
+  | { t: 'closed' }
+  | { t: 'offline' };
 
 export type ClientMessage = { t: 'state'; state: PlayerState };
 
@@ -50,8 +51,44 @@ export function normalizePartyCode(raw: string): string | null {
   return new RegExp(`^[${CODE_ALPHABET}]{${PARTY_CODE_LENGTH}}$`).test(code) ? code : null;
 }
 
-export function peerIdForCode(code: string): string {
-  return PARTY_PEER_PREFIX + code;
+export interface PartyTopics {
+  /** Retained, host-published: the game, or closed/offline. */
+  host: string;
+  /** Retained, host-published leaderboard. */
+  board: string;
+  /** Phones publish to state/<playerId>; the host subscribes to the wildcard. */
+  state: (playerId: string) => string;
+  stateWildcard: string;
+  /** Phones' last will, so the host can mark them offline. */
+  left: (playerId: string) => string;
+  leftWildcard: string;
+}
+
+export function partyTopics(code: string): PartyTopics {
+  const base = `${PARTY_TOPIC_ROOT}/${code}`;
+  return {
+    host: `${base}/host`,
+    board: `${base}/board`,
+    state: (id) => `${base}/state/${id}`,
+    stateWildcard: `${base}/state/+`,
+    left: (id) => `${base}/left/${id}`,
+    leftWildcard: `${base}/left/+`,
+  };
+}
+
+/** Extracts the last topic segment (the player ID) from a state/left topic. */
+export function playerIdFromTopic(topic: string): string {
+  return topic.slice(topic.lastIndexOf('/') + 1);
+}
+
+/** Parses a JSON payload; empty (retained-message clears), oversized or malformed payloads give null. */
+export function decodePayload(payload: Uint8Array, maxBytes: number): unknown {
+  if (payload.length === 0 || payload.length > maxBytes) return null;
+  try {
+    return JSON.parse(new TextDecoder().decode(payload));
+  } catch {
+    return null;
+  }
 }
 
 export function normalizePlayerName(raw: unknown): string {
@@ -93,13 +130,16 @@ function isShortString(v: unknown, max: number): v is string {
   return typeof v === 'string' && v.length <= max;
 }
 
+export function isValidPlayerId(v: unknown): v is string {
+  return typeof v === 'string' && /^[\w-]{8,64}$/.test(v);
+}
+
 /** Validates a message from a phone. The host never trusts the shape or the numbers. */
 export function parseClientMessage(raw: unknown, totalRounds: number): ClientMessage | null {
   if (!isRecord(raw) || raw['t'] !== 'state' || !isRecord(raw['state'])) return null;
   const s = raw['state'];
   const name = normalizePlayerName(s['name']);
-  if (!name || !isShortString(s['playerId'], 64) || !/^[\w-]{8,64}$/.test(s['playerId']))
-    return null;
+  if (!name || !isValidPlayerId(s['playerId'])) return null;
   if (!isInt(s['roundsPlayed'], 0, totalRounds) || typeof s['finished'] !== 'boolean') return null;
   if (!isInt(s['totalScore'], 0, s['roundsPlayed'] * DEFAULT_SCORING.maxScore)) return null;
   if (s['finished'] && s['roundsPlayed'] !== totalRounds) return null;
@@ -163,25 +203,24 @@ function parseLocation(v: unknown, index: number, mapId: string): MapLocation | 
   };
 }
 
-function parseBoardEntry(v: unknown): PublicBoardEntry | null {
+function parseBoardEntry(v: unknown): BoardEntry | null {
   if (!isRecord(v)) return null;
   const name = normalizePlayerName(v['name']);
-  if (!name) return null;
+  if (!name || !isValidPlayerId(v['playerId'])) return null;
   if (
     !isInt(v['roundsPlayed'], 0, MAX_ROUNDS) ||
     !isInt(v['totalScore'], 0, MAX_ROUNDS * DEFAULT_SCORING.maxScore)
   )
     return null;
-  const { finished, connected, you } = v;
-  if (typeof finished !== 'boolean' || typeof connected !== 'boolean' || typeof you !== 'boolean')
-    return null;
+  const { finished, connected } = v;
+  if (typeof finished !== 'boolean' || typeof connected !== 'boolean') return null;
   return {
+    playerId: v['playerId'],
     name,
     roundsPlayed: v['roundsPlayed'],
     totalScore: v['totalScore'],
     finished,
     connected,
-    you,
   };
 }
 
@@ -191,12 +230,14 @@ export function parseHostMessage(raw: unknown): HostMessage | null {
   switch (raw['t']) {
     case 'closed':
       return { t: 'closed' };
+    case 'offline':
+      return { t: 'offline' };
     case 'board': {
       const list = raw['entries'];
       if (!Array.isArray(list) || list.length > MAX_PARTY_PLAYERS) return null;
       const entries = list.map(parseBoardEntry);
       return entries.every((e) => e !== null)
-        ? { t: 'board', entries: entries as PublicBoardEntry[] }
+        ? { t: 'board', entries: entries as BoardEntry[] }
         : null;
     }
     case 'game': {

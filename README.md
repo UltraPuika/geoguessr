@@ -10,7 +10,7 @@ backend, no accounts, no analytics.
 - **Games:** 1–50 rounds, timer presets (none/15/30/60/120 s/custom), fixed or random order, optional
   repeats, 5,000 points per round, history stored locally
 - **Party mode:** players scan a QR code, enter a name and play on their phones; scores appear on a
-  live leaderboard on the host screen (peer-to-peer, see [Party mode](#party-mode-play-on-phones))
+  live leaderboard on the host screen (see [Party mode](#party-mode-play-on-phones))
 - **Cost guard:** persistent monthly Street View counter with a hard stop at 4,500 (configurable)
 
 > ⚠️ This app **cannot guarantee zero Google charges.** It reduces and caps *its own* usage inside one
@@ -238,17 +238,14 @@ Keyboard: Space or Enter submits a placed guess and advances after a result (not
 
 How it works and its limits:
 
-- Phones connect **peer-to-peer (WebRTC)** to the host tab. The free public [PeerJS](https://peerjs.com)
-  server is used only to set up the connection; it sees the devices' IP addresses and the party code,
-  but not maps or scores.
-- **Same Wi-Fi works out of the box.** Phones on mobile data (carrier NAT) or strict networks need a
-  **TURN relay**; without one, joining times out. Get free credentials, e.g. from
-  [Metered](https://www.metered.ca/stun-turn) (free tier is far more than party mode needs; it sends only
-  a few KB per player), then add repository secrets `TURN_URLS` (comma-separated `turn:`/`turns:` URLs),
-  `TURN_USERNAME` and `TURN_CREDENTIAL`, and redeploy. Locally, set `turnServers` in
-  `environment.local.ts`. Like the Maps key, these credentials are visible in the shipped JavaScript.
-- The party exists only in the host tab. Closing or reloading it ends the party; phones keep retrying
-  for about a minute if the connection drops.
+- Messages go through the free public [HiveMQ MQTT broker](https://www.hivemq.com/mqtt/public-mqtt-broker/)
+  over a secure WebSocket (`src/app/config/party-config.ts`), so phones can join from any network
+  (same Wi-Fi or mobile data) with no setup. Only the planned rounds, names and scores are sent.
+  **The broker is public:** anyone who knows or finds a party's topic can read those messages. Don't
+  use names you want to keep private. Retained party data expires on the broker after 12 hours and is
+  cleared when you end the party.
+- The leaderboard lives in the host tab. If it loses its connection, phones wait and resend scores
+  when it is back; closing the tab ends the party for new players.
 - Each phone loads Street View itself, with your API key, and counts against **its own** browser usage
   counter. A 5-round party with 6 players can use up to 30 panorama loads of your Google free allowance.
 - Phones need to reach the same site as the host. Use the GitHub Pages deployment, or for local testing
@@ -367,7 +364,7 @@ src/app
 │                 street-view-controller (single viewer, mode guards, reservations)
 ├─ data/          IndexedDB schema/migrations (idb) and repositories for maps, history, settings, usage
 ├─ services/      Angular wrappers: database, usage, Maps loader, Street View owner, active game, toasts,
-│                 party host/client (PeerJS)
+│                 party host/client (MQTT)
 ├─ shared/        Leaflet helpers, usage meter, utilities
 └─ features/      home, editor, setup, game, results, history, settings, party (standalone, lazy-loaded)
 ```
@@ -389,4 +386,4 @@ src/app
 | "Browser storage is full / unavailable" | Leave private mode, allow site data, free disk space, export maps and delete old history. |
 | Maps disappeared | Browser data was cleared or you are in another browser/profile. Import your JSON backup. |
 | Leaflet map grey | OSM tiles blocked by network/extension, or tile usage limits; try another tile provider. |
-| Phone: “Party not found” / “Timed out connecting” | The host tab must stay open. Check the code. A timeout means no network path: join the host's Wi-Fi, or configure a TURN relay (see Party mode). |
+| Phone: “Party not found” / “Could not reach the party server” | The host tab must stay open; check the code. If the server is unreachable, the network may block `broker.hivemq.com` (port 8884); try mobile data. |
