@@ -53,7 +53,9 @@ export class PartyHostComponent {
   }
 
   private async renderQr(url: string): Promise<void> {
-    const { toDataURL } = await import('qrcode');
+    const mod = await import('qrcode');
+    // CommonJS interop differs between dev and production builds: the API may sit on `default`.
+    const toDataURL = mod.toDataURL ?? (mod as unknown as { default: typeof mod }).default.toDataURL;
     const data = await toDataURL(url, { margin: 1, width: 480, errorCorrectionLevel: 'M' });
     if (this.joinUrl() === url) this.qrDataUrl.set(data);
   }
