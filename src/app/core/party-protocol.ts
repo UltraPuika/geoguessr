@@ -62,6 +62,9 @@ export interface PartyTopics {
   /** Phones' last will, so the host can mark them offline. */
   left: (playerId: string) => string;
   leftWildcard: string;
+  /** Phones ask the host to re-send the game, in case the broker did not deliver the retained copy. */
+  hello: (playerId: string) => string;
+  helloWildcard: string;
 }
 
 export function partyTopics(code: string): PartyTopics {
@@ -73,6 +76,8 @@ export function partyTopics(code: string): PartyTopics {
     stateWildcard: `${base}/state/+`,
     left: (id) => `${base}/left/${id}`,
     leftWildcard: `${base}/left/+`,
+    hello: (id) => `${base}/hello/${id}`,
+    helloWildcard: `${base}/hello/+`,
   };
 }
 

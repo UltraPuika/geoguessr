@@ -49,6 +49,7 @@ export class PartyClientService {
   private lastState: PlayerState | null = null;
   private generation = 0;
   private notFoundTimer: ReturnType<typeof setTimeout> | null = null;
+  private helloTimer: ReturnType<typeof setInterval> | null = null;
 
   /** Connects to a party, or does nothing if already connected to the same one. */
   async join(code: string): Promise<void> {
@@ -72,7 +73,10 @@ export class PartyClientService {
       this.client = client;
       client.on('connect', () => {
         if (gen !== this.generation) return;
-        client.subscribe([topics.host, topics.board], { qos: 1 });
+        // Ask for the game only once subscribed, so the host's answer cannot be missed.
+        client.subscribe([topics.host, topics.board], { qos: 1 }, () => {
+          if (gen === this.generation && !this.game()) this.startHello(gen);
+        });
         // Re-announce after every reconnect, so the host marks this phone online again.
         this.send();
         if (!this.game()) this.startNotFoundTimer(gen);
@@ -207,6 +211,27 @@ export class PartyClientService {
     }
   }
 
+  /** Pings the host every couple of seconds until the game arrives (or the not-found timer fires). */
+  private startHello(gen: number): void {
+    this.stopHello();
+    const ping = () => {
+      const client = this.client;
+      const topics = this.topics;
+      if (gen !== this.generation || this.game() || !client || !topics) {
+        this.stopHello();
+        return;
+      }
+      client.publish(topics.hello(this.playerId()), '1', { qos: 0 });
+    };
+    ping();
+    this.helloTimer = setInterval(ping, 2000);
+  }
+
+  private stopHello(): void {
+    if (this.helloTimer) clearInterval(this.helloTimer);
+    this.helloTimer = null;
+  }
+
   private startNotFoundTimer(gen: number, ms = NOT_FOUND_MS): void {
     this.clearNotFoundTimer();
     this.notFoundTimer = setTimeout(() => {
@@ -223,6 +248,7 @@ export class PartyClientService {
   private clearNotFoundTimer(): void {
     if (this.notFoundTimer) clearTimeout(this.notFoundTimer);
     this.notFoundTimer = null;
+    this.stopHello();
   }
 
   private fail(message: string): void {

@@ -40,6 +40,7 @@ export class PartyHostService {
   private topics: PartyTopics | null = null;
   private generation = 0;
   private boardTimer: ReturnType<typeof setTimeout> | null = null;
+  private lastGamePublish = 0;
 
   async open(game: PartyGame): Promise<void> {
     this.close();
@@ -117,9 +118,18 @@ export class PartyHostService {
     const game = this.game();
     if (!client || !topics || !game) return;
     this.error.set(null);
-    client.subscribe([topics.stateWildcard, topics.leftWildcard], { qos: 1 });
-    publishJson(client, topics.host, { t: 'game', game } satisfies HostMessage, true);
+    client.subscribe([topics.stateWildcard, topics.leftWildcard, topics.helloWildcard], { qos: 1 });
+    this.publishGame();
     this.publishBoard(true);
+  }
+
+  private publishGame(): void {
+    const client = this.client;
+    const topics = this.topics;
+    const game = this.game();
+    if (!client || !topics || !game) return;
+    this.lastGamePublish = Date.now();
+    publishJson(client, topics.host, { t: 'game', game } satisfies HostMessage, true);
   }
 
   private onMessage(topic: string, payload: Uint8Array): void {
@@ -128,6 +138,14 @@ export class PartyHostService {
     if (!topics || !game) return;
     const playerId = playerIdFromTopic(topic);
     if (!isValidPlayerId(playerId)) return;
+    if (topic === topics.hello(playerId)) {
+      // Throttled so a burst of joining phones costs one re-publish.
+      if (Date.now() - this.lastGamePublish > 1000) {
+        this.publishGame();
+        this.publishBoard(true);
+      }
+      return;
+    }
     if (topic === topics.left(playerId)) {
       this.patch(playerId, { connected: false });
       return;
