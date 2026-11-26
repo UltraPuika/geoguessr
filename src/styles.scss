@@ -1282,6 +1282,7 @@ input[type='radio'] {
   align-items: center;
   gap: 0.75rem;
   text-align: center;
+  width: 100%;
   max-width: 900px;
   margin: 0 auto;
 }
@@ -1323,7 +1324,7 @@ input[type='radio'] {
 }
 .live-reveal {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(280px, 420px);
+  grid-template-columns: minmax(0, 1fr) minmax(260px, 360px);
   gap: 1.25rem;
   align-items: start;
 }
@@ -1333,7 +1334,7 @@ input[type='radio'] {
   gap: 1rem;
 }
 .reveal-map {
-  height: min(70vh, 640px);
+  height: max(420px, calc(100vh - 220px));
   border-radius: var(--radius);
 }
 .leaflet-tooltip.reveal-label {
@@ -1369,8 +1370,9 @@ input[type='radio'] {
     align-items: center;
     justify-content: flex-end;
     gap: 0.25rem;
-    flex: 0 1 10rem;
+    flex: 1 1 0;
     min-width: 0;
+    max-width: 12rem;
     padding: 1rem 0.5rem;
     border-radius: var(--radius) var(--radius) 0 0;
     background: var(--surface-2, rgba(255, 255, 255, 0.06));
@@ -1396,9 +1398,8 @@ input[type='radio'] {
   }
   .podium-name {
     max-width: 100%;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+    overflow-wrap: anywhere;
+    line-height: 1.2;
     font-weight: 600;
   }
   .podium-score {
